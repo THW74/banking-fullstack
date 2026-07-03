@@ -1,0 +1,61 @@
+services:
+  traefik:
+    image: traefik:latest
+    container_name: banking-traefik
+    environment:
+      - DOCKER_API_VERSION=1.44
+    command:
+      - "--api.insecure=true"             # Enables dashboard on port 8080
+      - "--providers.docker=true"          # Enables Docker provider
+      - "--providers.docker.exposedbydefault=false" # Only expose labeled containers
+      - "--entrypoints.web.address=:80"    # Define web entrypoint on port 80
+    ports:
+      - "80:80"                            # HTTP gateway
+      - "8080:8080"                        # Traefik Dashboard web UI
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only Docker socket
+    restart: always
+
+  db:
+    image: postgres:16-alpine
+    container_name: banking-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: banking
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d banking"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: banking-backend
+    restart: always
+    env_file:
+      - ./backend/.env.local
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: banking
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`localhost`) && (PathPrefix(`/api`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`))"
+      - "traefik.http.routers.backend.entrypoints=web"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+
+volumes:
+  postgres_data:
