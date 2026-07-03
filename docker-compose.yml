@@ -16,6 +16,40 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only Docker socket
     restart: always
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: banking-rabbitmq
+    restart: always
+    ports:
+      - "5672:5672"                        # AMQP Protocol
+      - "15672:15672"                      # Management HTTP Console
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: banking-redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: banking-mailpit
+    restart: always
+    environment:
+      MP_WEBROOT: /mailpit/
+    ports:
+      - "1025:1025"                        # SMTP Protocol
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mailpit.rule=Host(`localhost`) && PathPrefix(`/mailpit`)"
+      - "traefik.http.routers.mailpit.entrypoints=web"
+      - "traefik.http.services.mailpit.loadbalancer.server.port=8025"
+
   db:
     image: postgres:16-alpine
     container_name: banking-db
@@ -48,14 +82,97 @@ services:
       POSTGRES_DB: banking
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
     depends_on:
       db:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mailpit:
+        condition: service_started
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=Host(`localhost`) && (PathPrefix(`/api`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`))"
       - "traefik.http.routers.backend.entrypoints=web"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: banking-celery-worker
+    command: uv run celery -A infrastructure.celery.celery_app worker --loglevel=info
+    restart: always
+    env_file:
+      - ./backend/.env.local
+    environment:
+      POSTGRES_HOST: db
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: banking-celery-beat
+    command: uv run celery -A infrastructure.celery.celery_app beat --scheduler redbeat.RedBeatScheduler --loglevel=info
+    restart: always
+    env_file:
+      - ./backend/.env.local
+    environment:
+      POSTGRES_HOST: db
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: banking-flower
+    command: uv run celery -A infrastructure.celery.celery_app flower --port=5555 --url_prefix=flower
+    restart: always
+    env_file:
+      - ./backend/.env.local
+    environment:
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.flower.rule=Host(`localhost`) && PathPrefix(`/flower`)"
+      - "traefik.http.routers.flower.entrypoints=web"
+      - "traefik.http.services.flower.loadbalancer.server.port=5555"
 
 volumes:
   postgres_data:
