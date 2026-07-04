@@ -11,7 +11,7 @@ pytestmark = pytest.mark.asyncio
 async def test_rejects_placeholder_jwt_secret(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "secret-key-placeholder-change-in-production")
     with pytest.raises(ValueError) as exc:
-        Settings()
+        Settings()  # pyright: ignore [reportCallIssue]
     assert "JWT_SECRET_KEY is insecure or missing" in str(exc.value)
 
 
