@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     SMTP_USER: str | None = None
     SMTP_PASSWORD: str | None = None
 
+    JWT_SECRET_KEY: str = "secret-key-placeholder-change-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    COOKIE_SECURE: bool = False
+
     @model_validator(mode="before")
     @classmethod
     def remove_empty_strings(cls, values: dict) -> dict:
