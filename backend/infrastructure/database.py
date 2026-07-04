@@ -7,6 +7,7 @@ from modules.users.models import User
 from modules.customer_profiles.models import CustomerProfile
 from modules.next_of_kin.models import NextOfKin
 from modules.accounts.models import BankAccount
+from modules.transactions.models import Transaction, LedgerEntry
 from typing import Annotated, AsyncGenerator, cast
 from fastapi import Depends
 

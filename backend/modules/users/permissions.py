@@ -19,6 +19,8 @@ class UserPermission(StrEnum):
     READ_BANK_ACCOUNTS = "READ_BANK_ACCOUNTS"
     CREATE_BANK_ACCOUNTS = "CREATE_BANK_ACCOUNTS"
     MANAGE_BANK_ACCOUNT_STATUS = "MANAGE_BANK_ACCOUNT_STATUS"
+    READ_TRANSACTIONS = "READ_TRANSACTIONS"
+    POST_BANK_TRANSACTIONS = "POST_BANK_TRANSACTIONS"
 
 
 ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
@@ -27,6 +29,8 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
     RoleChoicesSchema.TELLER: {
         UserPermission.READ_USER_DETAIL,
         UserPermission.READ_BANK_ACCOUNTS,
+        UserPermission.READ_TRANSACTIONS,
+        UserPermission.POST_BANK_TRANSACTIONS,
     },
     
     RoleChoicesSchema.ACCOUNT_EXECUTIVE: {
@@ -35,6 +39,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.UPDATE_CUSTOMER_PROFILE,
         UserPermission.READ_KYC_PROFILES,
         UserPermission.READ_BANK_ACCOUNTS,
+        UserPermission.READ_TRANSACTIONS,
     },
     
     RoleChoicesSchema.BRANCH_MANAGER: {
@@ -47,6 +52,8 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_BANK_ACCOUNTS,
         UserPermission.CREATE_BANK_ACCOUNTS,
         UserPermission.MANAGE_BANK_ACCOUNT_STATUS,
+        UserPermission.READ_TRANSACTIONS,
+        UserPermission.POST_BANK_TRANSACTIONS,
     },
     
     RoleChoicesSchema.ADMIN: {
@@ -64,6 +71,8 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_BANK_ACCOUNTS,
         UserPermission.CREATE_BANK_ACCOUNTS,
         UserPermission.MANAGE_BANK_ACCOUNT_STATUS,
+        UserPermission.READ_TRANSACTIONS,
+        UserPermission.POST_BANK_TRANSACTIONS,
     },
     
     RoleChoicesSchema.SUPER_ADMIN: {
@@ -83,6 +92,8 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_BANK_ACCOUNTS,
         UserPermission.CREATE_BANK_ACCOUNTS,
         UserPermission.MANAGE_BANK_ACCOUNT_STATUS,
+        UserPermission.READ_TRANSACTIONS,
+        UserPermission.POST_BANK_TRANSACTIONS,
     },
 }
 
