@@ -7,12 +7,18 @@ from infrastructure.database import get_session
 from modules.auth.dependencies import ActiveCurrentUserDep, CurrentUser
 from modules.users.guards import require_user_permission
 from modules.users.permissions import UserPermission
-from .schemas import BankAccountCreateSchema, BankAccountUpdateSchema, BankAccountReadSchema
-from .services import bank_account_service
+from .schemas import (
+    BankAccountCreateSchema,
+    BankAccountReadSchema,
+    BankAccountUpdateSchema,
+    InternalAccountReadSchema,
+)
+from .services import bank_account_service, internal_account_service
 from .enums import AccountStatusEnum
 
 customer_accounts_router = APIRouter()
 admin_accounts_router = APIRouter()
+admin_internal_accounts_router = APIRouter()
 
 
 # --- CUSTOMER ENDPOINTS ---
@@ -110,3 +116,32 @@ async def close_account(
     db: AsyncSession = Depends(get_session)
 ):
     return await bank_account_service.close_account(db, account_id)
+
+
+# --- ADMIN / STAFF INTERNAL ACCOUNT ENDPOINTS ---
+
+@admin_internal_accounts_router.get(
+    "",
+    response_model=list[InternalAccountReadSchema],
+    summary="List internal settlement accounts (Staff/Admin)"
+)
+async def list_internal_accounts(
+    current_user: Annotated[CurrentUser, Depends(require_user_permission(UserPermission.READ_BANK_ACCOUNTS))],
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_session)
+):
+    return await internal_account_service.list_internal_accounts(db, limit, offset)
+
+
+@admin_internal_accounts_router.get(
+    "/{account_id}",
+    response_model=InternalAccountReadSchema,
+    summary="Get internal settlement account detail (Staff/Admin)"
+)
+async def get_internal_account_for_admin(
+    account_id: uuid.UUID,
+    current_user: Annotated[CurrentUser, Depends(require_user_permission(UserPermission.READ_BANK_ACCOUNTS))],
+    db: AsyncSession = Depends(get_session)
+):
+    return await internal_account_service.get_internal_account_by_id(db, account_id)

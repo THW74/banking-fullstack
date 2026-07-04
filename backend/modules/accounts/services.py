@@ -1,14 +1,15 @@
 import uuid
 import random
 from datetime import datetime, timezone
+from decimal import Decimal
 from fastapi import HTTPException, status
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.customer_profiles.models import CustomerProfile
 from modules.customer_profiles.enums import KycStatusEnum
-from .models import BankAccount
-from .enums import AccountStatusEnum
+from .models import BankAccount, InternalAccount
+from .enums import AccountCurrencyEnum, AccountStatusEnum, InternalAccountTypeEnum
 from .schemas import BankAccountCreateSchema, BankAccountUpdateSchema
 
 
@@ -171,3 +172,62 @@ class BankAccountService:
 
 
 bank_account_service = BankAccountService()
+
+
+class InternalAccountService:
+    async def get_or_create_cash_settlement_account(
+        self, db: AsyncSession, currency: AccountCurrencyEnum
+    ) -> InternalAccount:
+        account_code = f"CASH-{currency.value}"
+        statement = (
+            select(InternalAccount)
+            .where(InternalAccount.account_code == account_code)
+            .with_for_update()
+        )
+        result = await db.execute(statement)
+        account = result.scalar_one_or_none()
+        if account:
+            return account
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        account = InternalAccount(
+            account_code=account_code,
+            account_name=f"Cash Settlement {currency.value}",
+            account_type=InternalAccountTypeEnum.CASH_SETTLEMENT,
+            currency=currency,
+            balance=Decimal("0.00"),
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(account)
+        await db.flush()
+        return account
+
+    async def list_internal_accounts(
+        self, db: AsyncSession, limit: int = 50, offset: int = 0
+    ) -> list[InternalAccount]:
+        statement = (
+            select(InternalAccount)
+            .order_by(InternalAccount.account_code)
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await db.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_internal_account_by_id(
+        self, db: AsyncSession, account_id: uuid.UUID
+    ) -> InternalAccount:
+        statement = select(InternalAccount).where(InternalAccount.id == account_id)
+        result = await db.execute(statement)
+        account = result.scalar_one_or_none()
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Internal account not found",
+            )
+        return account
+
+
+internal_account_service = InternalAccountService()
