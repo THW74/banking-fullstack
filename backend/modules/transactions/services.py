@@ -1,15 +1,19 @@
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException, status
 from sqlmodel import select, col
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.accounts.models import BankAccount, InternalAccount
-from modules.accounts.enums import AccountStatusEnum
+from modules.accounts.enums import (
+    AccountCurrencyEnum,
+    AccountStatusEnum,
+    InternalAccountTypeEnum,
+)
 from modules.accounts.services import internal_account_service
-from .models import Transaction, LedgerEntry
+from .models import Transaction, LedgerEntry, FeeRule
 from .enums import TransactionTypeEnum, TransactionStatusEnum, LedgerEntryTypeEnum
 from .schemas import (
     CustomerTransferSchema,
@@ -17,6 +21,42 @@ from .schemas import (
     AdminWithdrawalSchema,
     TransactionReversalSchema,
 )
+
+
+class FeeService:
+    async def calculate_fee(
+        self,
+        db: AsyncSession,
+        transaction_type: TransactionTypeEnum,
+        currency: AccountCurrencyEnum,
+        amount: Decimal,
+    ) -> Decimal:
+        statement = select(FeeRule).where(
+            FeeRule.transaction_type == transaction_type,
+            FeeRule.currency == currency,
+            FeeRule.is_active == True,
+        )
+        result = await db.execute(statement)
+        rules = list(result.scalars().all())
+
+        if len(rules) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Multiple active fee rules found",
+            )
+
+        if not rules:
+            return Decimal("0.00")
+
+        rule = rules[0]
+        fee = rule.fixed_amount + (amount * rule.percentage_rate)
+        fee = max(fee, rule.min_fee)
+        if rule.max_fee is not None:
+            fee = min(fee, rule.max_fee)
+        return fee.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+fee_service = FeeService()
 
 
 class TransactionService:
@@ -83,24 +123,46 @@ class TransactionService:
                 detail="Currency mismatch between source and destination accounts",
             )
 
+        fee_amount = await fee_service.calculate_fee(
+            db,
+            TransactionTypeEnum.TRANSFER,
+            source.currency,
+            schema.amount,
+        )
+        total_debit_amount = schema.amount + fee_amount
+
         # Balance check
-        if source.available_balance < schema.amount:
+        if source.available_balance < total_debit_amount:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Insufficient funds",
+                detail="Insufficient funds including fee",
+            )
+
+        fee_account: InternalAccount | None = None
+        if fee_amount > Decimal("0.00"):
+            fee_account = await internal_account_service.get_or_create_fee_income_account(
+                db, source.currency
             )
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         reference = await self._generate_unique_reference(db)
 
         # Update balances
-        source.available_balance -= schema.amount
-        source.current_balance -= schema.amount
+        source.available_balance -= total_debit_amount
+        source.current_balance -= total_debit_amount
         source.updated_at = now
 
         destination.available_balance += schema.amount
         destination.current_balance += schema.amount
         destination.updated_at = now
+
+        if fee_account is not None:
+            self._apply_internal_account_entry_effect(
+                fee_account,
+                LedgerEntryTypeEnum.CREDIT,
+                fee_amount,
+            )
+            fee_account.updated_at = now
 
         # Create transaction
         transaction = Transaction(
@@ -110,18 +172,20 @@ class TransactionService:
             source_account_id=schema.source_account_id,
             destination_account_id=schema.destination_account_id,
             amount=schema.amount,
+            fee_amount=fee_amount,
+            total_debit_amount=total_debit_amount,
             currency=source.currency,
             description=schema.description,
             created_by_user_id=actor_user_id,
             posted_at=now,
         )
 
-        # Create ledger entries (DEBIT on source, CREDIT on destination)
+        # Create ledger entries (DEBIT on source, CREDIT on destination/fees)
         debit_entry = LedgerEntry(
             transaction_id=transaction.id,
             customer_account_id=source.id,
             entry_type=LedgerEntryTypeEnum.DEBIT,
-            amount=schema.amount,
+            amount=total_debit_amount,
             currency=source.currency,
             balance_after=source.available_balance,
         )
@@ -134,8 +198,21 @@ class TransactionService:
             balance_after=destination.available_balance,
         )
         entries = [debit_entry, credit_entry]
+        if fee_account is not None:
+            entries.append(
+                LedgerEntry(
+                    transaction_id=transaction.id,
+                    internal_account_id=fee_account.id,
+                    entry_type=LedgerEntryTypeEnum.CREDIT,
+                    amount=fee_amount,
+                    currency=source.currency,
+                    balance_after=fee_account.balance,
+                )
+            )
         self._assert_ledger_entries_valid(entries)
 
+        if fee_account is not None:
+            db.add(fee_account)
         db.add(source)
         db.add(destination)
         db.add(transaction)
@@ -173,7 +250,11 @@ class TransactionService:
         )
 
         # Update balances
-        cash_account.balance += schema.amount
+        self._apply_internal_account_entry_effect(
+            cash_account,
+            LedgerEntryTypeEnum.DEBIT,
+            schema.amount,
+        )
         cash_account.updated_at = now
         destination.available_balance += schema.amount
         destination.current_balance += schema.amount
@@ -187,6 +268,8 @@ class TransactionService:
             source_account_id=None,
             destination_account_id=schema.destination_account_id,
             amount=schema.amount,
+            fee_amount=Decimal("0.00"),
+            total_debit_amount=schema.amount,
             currency=destination.currency,
             description=schema.description,
             created_by_user_id=actor_user_id,
@@ -259,7 +342,11 @@ class TransactionService:
         source.available_balance -= schema.amount
         source.current_balance -= schema.amount
         source.updated_at = now
-        cash_account.balance -= schema.amount
+        self._apply_internal_account_entry_effect(
+            cash_account,
+            LedgerEntryTypeEnum.CREDIT,
+            schema.amount,
+        )
         cash_account.updated_at = now
 
         # Create transaction
@@ -270,6 +357,8 @@ class TransactionService:
             source_account_id=schema.source_account_id,
             destination_account_id=None,
             amount=schema.amount,
+            fee_amount=Decimal("0.00"),
+            total_debit_amount=schema.amount,
             currency=source.currency,
             description=schema.description,
             created_by_user_id=actor_user_id,
@@ -348,6 +437,9 @@ class TransactionService:
         source_account_id, destination_account_id = (
             self._get_reversal_account_targets(original)
         )
+        reversal_total_debit_amount = original.total_debit_amount
+        if reversal_total_debit_amount == Decimal("0.00"):
+            reversal_total_debit_amount = original.amount
 
         reversal_transaction = Transaction(
             reference=reference,
@@ -356,6 +448,8 @@ class TransactionService:
             source_account_id=source_account_id,
             destination_account_id=destination_account_id,
             amount=original.amount,
+            fee_amount=original.fee_amount,
+            total_debit_amount=reversal_total_debit_amount,
             currency=original.currency,
             description=schema.reason,
             created_by_user_id=actor_user_id,
@@ -643,11 +737,15 @@ class TransactionService:
         )
 
         if original_entry.entry_type == LedgerEntryTypeEnum.DEBIT:
-            account.balance -= original_entry.amount
             reversal_type = LedgerEntryTypeEnum.CREDIT
         else:
-            account.balance += original_entry.amount
             reversal_type = LedgerEntryTypeEnum.DEBIT
+
+        self._apply_internal_account_entry_effect(
+            account,
+            reversal_type,
+            original_entry.amount,
+        )
 
         account.updated_at = now
         db.add(account)
@@ -659,6 +757,31 @@ class TransactionService:
             amount=original_entry.amount,
             currency=original_entry.currency,
             balance_after=account.balance,
+        )
+
+    def _apply_internal_account_entry_effect(
+        self,
+        account: InternalAccount,
+        entry_type: LedgerEntryTypeEnum,
+        amount: Decimal,
+    ) -> None:
+        if account.account_type == InternalAccountTypeEnum.CASH_SETTLEMENT:
+            if entry_type == LedgerEntryTypeEnum.DEBIT:
+                account.balance += amount
+            else:
+                account.balance -= amount
+            return
+
+        if account.account_type == InternalAccountTypeEnum.FEE_INCOME:
+            if entry_type == LedgerEntryTypeEnum.CREDIT:
+                account.balance += amount
+            else:
+                account.balance -= amount
+            return
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unsupported internal account type",
         )
 
     def _assert_ledger_entries_valid(self, entries: list[LedgerEntry]) -> None:

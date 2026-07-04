@@ -28,6 +28,12 @@ class Transaction(SQLModel, table=True):
     )
 
     amount: Decimal = Field(max_digits=18, decimal_places=2, nullable=False)
+    fee_amount: Decimal = Field(
+        default=Decimal("0.00"), max_digits=18, decimal_places=2, nullable=False
+    )
+    total_debit_amount: Decimal = Field(
+        default=Decimal("0.00"), max_digits=18, decimal_places=2, nullable=False
+    )
     currency: AccountCurrencyEnum = Field(nullable=False)
 
     description: str | None = Field(default=None, max_length=255)
@@ -45,6 +51,33 @@ class Transaction(SQLModel, table=True):
 
     posted_at: datetime | None = None
     created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+
+class FeeRule(SQLModel, table=True):
+    __tablename__: Any = "fee_rules"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+
+    transaction_type: TransactionTypeEnum = Field(nullable=False, index=True)
+    currency: AccountCurrencyEnum = Field(nullable=False, index=True)
+
+    fixed_amount: Decimal = Field(
+        default=Decimal("0.00"), max_digits=18, decimal_places=2
+    )
+    percentage_rate: Decimal = Field(
+        default=Decimal("0.00"), max_digits=8, decimal_places=6
+    )
+    min_fee: Decimal = Field(default=Decimal("0.00"), max_digits=18, decimal_places=2)
+    max_fee: Decimal | None = Field(default=None, max_digits=18, decimal_places=2)
+
+    is_active: bool = Field(default=True, index=True)
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 

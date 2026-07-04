@@ -204,6 +204,35 @@ class InternalAccountService:
         await db.flush()
         return account
 
+    async def get_or_create_fee_income_account(
+        self, db: AsyncSession, currency: AccountCurrencyEnum
+    ) -> InternalAccount:
+        account_code = f"FEE-INCOME-{currency.value}"
+        statement = (
+            select(InternalAccount)
+            .where(InternalAccount.account_code == account_code)
+            .with_for_update()
+        )
+        result = await db.execute(statement)
+        account = result.scalar_one_or_none()
+        if account:
+            return account
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        account = InternalAccount(
+            account_code=account_code,
+            account_name=f"Fee Income {currency.value}",
+            account_type=InternalAccountTypeEnum.FEE_INCOME,
+            currency=currency,
+            balance=Decimal("0.00"),
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(account)
+        await db.flush()
+        return account
+
     async def list_internal_accounts(
         self, db: AsyncSession, limit: int = 50, offset: int = 0
     ) -> list[InternalAccount]:

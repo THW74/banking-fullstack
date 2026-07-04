@@ -45,6 +45,8 @@ class TransactionReadSchema(BaseModel):
     source_account_id: uuid.UUID | None
     destination_account_id: uuid.UUID | None
     amount: Decimal
+    fee_amount: Decimal
+    total_debit_amount: Decimal
     currency: AccountCurrencyEnum
     description: str | None
     created_by_user_id: uuid.UUID
