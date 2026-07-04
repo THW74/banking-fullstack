@@ -37,19 +37,12 @@ class RoleChoicesSchema(str, Enum):
     TELLER = "teller"
 
 
-class BaseUserSchema(SQLModel):
-    username: str | None = Field(default=None, max_length=12, unique=True)
-    email: EmailStr = Field(unique=True, index=True, max_length=255)
+class UserCreateSchema(SQLModel):
+    username: str | None = Field(default=None, max_length=12)
+    email: EmailStr = Field(max_length=255)
     full_name: str = Field(max_length=100)
-    id_no: int = Field(unique=True, gt=0)
-    is_active: bool = False
-    is_superuser: bool = False
-    security_question: SecurityQuestionsSchema = Field(max_length=30)
-    account_status: AccountStatusSchema = Field(default=AccountStatusSchema.INACTIVE)
-    role: RoleChoicesSchema = Field(default=RoleChoicesSchema.CUSTOMER)
-
-
-class UserCreateSchema(BaseUserSchema):
+    id_no: int = Field(gt=0)
+    security_question: SecurityQuestionsSchema
     security_answer: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=8, max_length=40)
     confirm_password: str = Field(min_length=8, max_length=40)

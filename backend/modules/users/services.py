@@ -2,7 +2,7 @@ import uuid
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from .models import User
-from .schemas import UserCreateSchema
+from .schemas import UserCreateSchema, AccountStatusSchema, RoleChoicesSchema
 
 
 class UserService:
@@ -23,14 +23,18 @@ class UserService:
         hashed_password: str,
         security_answer_hash: str,
     ) -> User:
-        db_user = User.model_validate(
-            user_in,
-            update={
-                "hashed_password": hashed_password,
-                "security_answer_hash": security_answer_hash,
-                "is_active": False,  # Pending OTP verification
-                "is_superuser": False,  # Default to False
-            }
+        db_user = User(
+            username=user_in.username,
+            email=user_in.email,
+            full_name=user_in.full_name,
+            id_no=user_in.id_no,
+            security_question=user_in.security_question,
+            security_answer_hash=security_answer_hash,
+            hashed_password=hashed_password,
+            is_active=False,
+            is_superuser=False,
+            account_status=AccountStatusSchema.INACTIVE,
+            role=RoleChoicesSchema.CUSTOMER,
         )
         db.add(db_user)
         await db.commit()

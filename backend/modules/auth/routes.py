@@ -188,31 +188,27 @@ async def forgot_password(
     db: AsyncSession = Depends(get_session)
 ):
     user = await user_service.get_by_email(db, payload.email)
+    
+    credentials_valid = False
     if user:
         # Verify security question and answer
         if (
-            user.security_question != payload.security_question
-            or not auth_service.verify_password(payload.security_answer.strip().lower(), user.security_answer_hash)
+            user.security_question == payload.security_question
+            and auth_service.verify_password(payload.security_answer.strip().lower(), user.security_answer_hash)
         ):
-            # To prevent user enumeration in high-security apps, return same message or raise 400
-            # Since banking credentials are high security, we throw 400 for credentials mismatch
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid email or security credentials"
-            )
+            credentials_valid = True
+    else:
+        # Mitigate timing attack by executing a dummy verify_password
+        auth_service.verify_password("dummy_password", "$argon2id$v=19$m=65536,t=3,p=4$wohoKJ67pqR/zn3yqUMD/A$nWq8jMuzkbatvqUg68mixyZqicD9+5+BP54GB/KvKv8")
 
+    if credentials_valid and user:
         # Generate password_reset scope OTP
         try:
             otp_code = otp_service.generate_otp(user.email, "password_reset")
-        except ValueError as e:
-            if str(e) == "cooldown":
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Please wait 60 seconds before requesting another OTP."
-                )
-            raise
-
-        send_otp_email_task.delay(user.email, otp_code)
+            send_otp_email_task.delay(user.email, otp_code)
+        except ValueError:
+            # Even if cooldown throws, return 200 to prevent timing-based validation leaks
+            pass
 
     return {
         "message": "If the email is registered and credentials match, a password reset code has been sent."

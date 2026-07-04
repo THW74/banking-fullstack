@@ -158,8 +158,10 @@ async def test_password_reset_flow(client: AsyncClient):
         "security_answer": "wronganswer",
     }
     resp = await client.post("/api/v1/auth/forgot-password", json=forgot_wrong)
-    assert resp.status_code == 400
-    assert "Invalid email or security credentials" in resp.json()["detail"]
+    assert resp.status_code == 200
+    assert "password reset code has been sent" in resp.json()["message"]
+    # Verify Redis: OTP was NOT generated for invalid credentials
+    assert redis_client.get(f"otp:password_reset:{email}") is None
 
     # --- HAPPY PATH: Forgot Password ---
     forgot_correct = forgot_wrong.copy()
@@ -170,8 +172,8 @@ async def test_password_reset_flow(client: AsyncClient):
 
     # --- EDGE CASE: OTP Cooldown ---
     resp = await client.post("/api/v1/auth/forgot-password", json=forgot_correct)
-    assert resp.status_code == 422
-    assert "Please wait 60 seconds" in resp.json()["detail"]
+    assert resp.status_code == 200
+    assert "password reset code has been sent" in resp.json()["message"]
 
     # Retrieve Reset OTP from Redis
     reset_otp = redis_client.get(f"otp:password_reset:{email}")
