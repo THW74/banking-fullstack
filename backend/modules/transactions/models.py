@@ -33,6 +33,16 @@ class Transaction(SQLModel, table=True):
     description: str | None = Field(default=None, max_length=255)
     created_by_user_id: uuid.UUID = Field(foreign_key="users.id", nullable=False)
 
+    reversed_transaction_id: uuid.UUID | None = Field(
+        default=None, foreign_key="transactions.id", index=True
+    )
+    reversed_by_transaction_id: uuid.UUID | None = Field(
+        default=None, foreign_key="transactions.id", index=True
+    )
+    reversal_reason: str | None = Field(default=None, max_length=255)
+    reversed_at: datetime | None = None
+    reversed_by_user_id: uuid.UUID | None = Field(default=None, foreign_key="users.id")
+
     posted_at: datetime | None = None
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None)

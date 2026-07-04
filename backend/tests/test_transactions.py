@@ -167,6 +167,22 @@ async def test_transactions_scenarios(client: AsyncClient):
         acct_a_eur = await create_active_account(db, cust_a.id, AccountCurrencyEnum.EUR, Decimal("2000.00"))
         acct_b1 = await create_active_account(db, cust_b.id, AccountCurrencyEnum.USD, Decimal("500.00"))
 
+        usd_cash_result = await db.execute(
+            select(InternalAccount).where(InternalAccount.account_code == "CASH-USD")
+        )
+        usd_cash = usd_cash_result.scalar_one_or_none()
+        usd_cash_baseline = (
+            usd_cash.balance if usd_cash is not None else Decimal("0.00")
+        )
+
+        eur_cash_result = await db.execute(
+            select(InternalAccount).where(InternalAccount.account_code == "CASH-EUR")
+        )
+        eur_cash = eur_cash_result.scalar_one_or_none()
+        eur_cash_baseline = (
+            eur_cash.balance if eur_cash is not None else Decimal("0.00")
+        )
+
     cust_a_cookie = await login_and_get_cookie(client, cust_a.email)
     cust_b_cookie = await login_and_get_cookie(client, cust_b.email)
     teller_cookie = await login_and_get_cookie(client, teller.email)
@@ -214,7 +230,7 @@ async def test_transactions_scenarios(client: AsyncClient):
         cash_result = await db.execute(cash_stmt)
         cash_account = cash_result.scalar_one()
         assert cash_account.currency == AccountCurrencyEnum.USD
-        assert cash_account.balance == Decimal("500.00")
+        assert cash_account.balance == usd_cash_baseline + Decimal("500.00")
 
         entries_stmt = select(LedgerEntry).where(LedgerEntry.transaction_id == uuid.UUID(deposit_txn["id"]))
         entries_result = await db.execute(entries_stmt)
@@ -230,7 +246,7 @@ async def test_transactions_scenarios(client: AsyncClient):
         assert debit[0].amount == credit[0].amount == Decimal("500.00")
         assert debit[0].internal_account_id == cash_account.id
         assert debit[0].customer_account_id is None
-        assert debit[0].balance_after == Decimal("500.00")
+        assert debit[0].balance_after == usd_cash_baseline + Decimal("500.00")
         assert credit[0].customer_account_id == acct_a1.id
         assert credit[0].internal_account_id is None
         assert credit[0].balance_after == Decimal("5500.00")
@@ -251,7 +267,7 @@ async def test_transactions_scenarios(client: AsyncClient):
         cash_result = await db.execute(cash_stmt)
         cash_account = cash_result.scalar_one()
         assert cash_account.currency == AccountCurrencyEnum.EUR
-        assert cash_account.balance == Decimal("25.00")
+        assert cash_account.balance == eur_cash_baseline + Decimal("25.00")
 
     # --- 4. Customer A transfers to own account (acct_a1 -> acct_a2) ---
     client.cookies.clear()
@@ -405,7 +421,7 @@ async def test_transactions_scenarios(client: AsyncClient):
         )
         cash_result = await db.execute(cash_stmt)
         cash_account = cash_result.scalar_one()
-        assert cash_account.balance == Decimal("200.00")
+        assert cash_account.balance == usd_cash_baseline + Decimal("200.00")
 
         entries_stmt = select(LedgerEntry).where(
             LedgerEntry.transaction_id == uuid.UUID(withdrawal_txn["id"])
@@ -426,7 +442,7 @@ async def test_transactions_scenarios(client: AsyncClient):
         assert debit[0].balance_after == Decimal("3500.00")
         assert credit[0].internal_account_id == cash_account.id
         assert credit[0].customer_account_id is None
-        assert credit[0].balance_after == Decimal("200.00")
+        assert credit[0].balance_after == usd_cash_baseline + Decimal("200.00")
 
     # --- 14. Withdrawal fails: insufficient funds ---
     client.cookies.clear()
@@ -505,8 +521,8 @@ async def test_transactions_scenarios(client: AsyncClient):
     cash_eur = next(
         account for account in internal_accounts if account["account_code"] == "CASH-EUR"
     )
-    assert Decimal(cash_usd["balance"]) == Decimal("250.00")
-    assert Decimal(cash_eur["balance"]) == Decimal("25.00")
+    assert Decimal(cash_usd["balance"]) == usd_cash_baseline + Decimal("250.00")
+    assert Decimal(cash_eur["balance"]) == eur_cash_baseline + Decimal("25.00")
 
     resp = await client.get(f"/api/v1/admin/internal-accounts/{cash_usd['id']}")
     assert resp.status_code == 200
@@ -519,7 +535,7 @@ async def test_transactions_scenarios(client: AsyncClient):
         cash_result = await db.execute(cash_stmt)
         cash_accounts = list(cash_result.scalars().all())
         assert len(cash_accounts) == 1
-        assert cash_accounts[0].balance == Decimal("250.00")
+        assert cash_accounts[0].balance == usd_cash_baseline + Decimal("250.00")
 
     # --- 21. Customer cannot access admin transaction/internal-account endpoints ---
     client.cookies.clear()

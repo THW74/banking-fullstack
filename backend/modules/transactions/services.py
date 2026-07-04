@@ -6,12 +6,17 @@ from fastapi import HTTPException, status
 from sqlmodel import select, col
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.accounts.models import BankAccount
+from modules.accounts.models import BankAccount, InternalAccount
 from modules.accounts.enums import AccountStatusEnum
 from modules.accounts.services import internal_account_service
 from .models import Transaction, LedgerEntry
 from .enums import TransactionTypeEnum, TransactionStatusEnum, LedgerEntryTypeEnum
-from .schemas import CustomerTransferSchema, AdminDepositSchema, AdminWithdrawalSchema
+from .schemas import (
+    CustomerTransferSchema,
+    AdminDepositSchema,
+    AdminWithdrawalSchema,
+    TransactionReversalSchema,
+)
 
 
 class TransactionService:
@@ -301,6 +306,106 @@ class TransactionService:
         await db.refresh(transaction)
         return transaction
 
+    async def reverse_transaction(
+        self,
+        db: AsyncSession,
+        transaction_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+        schema: TransactionReversalSchema,
+    ) -> Transaction:
+        """Reverse a posted transaction by creating opposite ledger entries."""
+        original = await self._get_transaction_for_update(db, transaction_id)
+
+        if original.transaction_type == TransactionTypeEnum.REVERSAL:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reversal transactions cannot be reversed",
+            )
+
+        if original.status != TransactionStatusEnum.POSTED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only posted transactions can be reversed",
+            )
+
+        if original.reversed_by_transaction_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Transaction is already reversed",
+            )
+
+        original_entries = await self.get_ledger_entries_for_transaction(
+            db, original.id
+        )
+        if not original_entries:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Transaction has no ledger entries",
+            )
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        reference = await self._generate_unique_reference(db)
+        source_account_id, destination_account_id = (
+            self._get_reversal_account_targets(original)
+        )
+
+        reversal_transaction = Transaction(
+            reference=reference,
+            transaction_type=TransactionTypeEnum.REVERSAL,
+            status=TransactionStatusEnum.POSTED,
+            source_account_id=source_account_id,
+            destination_account_id=destination_account_id,
+            amount=original.amount,
+            currency=original.currency,
+            description=schema.reason,
+            created_by_user_id=actor_user_id,
+            reversed_transaction_id=original.id,
+            reversal_reason=schema.reason,
+            posted_at=now,
+        )
+
+        reversal_entries: list[LedgerEntry] = []
+        for original_entry in original_entries:
+            if original_entry.customer_account_id is not None:
+                reversal_entries.append(
+                    await self._reverse_customer_ledger_entry(
+                        db, original_entry, reversal_transaction.id, now
+                    )
+                )
+                continue
+
+            if original_entry.internal_account_id is not None:
+                reversal_entries.append(
+                    await self._reverse_internal_ledger_entry(
+                        db, original_entry, reversal_transaction.id, now
+                    )
+                )
+                continue
+
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ledger entry must reference exactly one account target",
+            )
+
+        self._assert_ledger_entries_valid(reversal_entries)
+
+        db.add(reversal_transaction)
+        await db.flush()
+
+        original.status = TransactionStatusEnum.REVERSED
+        original.reversed_by_transaction_id = reversal_transaction.id
+        original.reversal_reason = schema.reason
+        original.reversed_at = now
+        original.reversed_by_user_id = actor_user_id
+
+        db.add(original)
+        for entry in reversal_entries:
+            db.add(entry)
+
+        await db.commit()
+        await db.refresh(reversal_transaction)
+        return reversal_transaction
+
     # ------------------------------------------------------------------ #
     #  Read queries                                                        #
     # ------------------------------------------------------------------ #
@@ -394,6 +499,23 @@ class TransactionService:
     #  Internal helpers                                                    #
     # ------------------------------------------------------------------ #
 
+    async def _get_transaction_for_update(
+        self, db: AsyncSession, transaction_id: uuid.UUID
+    ) -> Transaction:
+        statement = (
+            select(Transaction)
+            .where(Transaction.id == transaction_id)
+            .with_for_update()
+        )
+        result = await db.execute(statement)
+        transaction = result.scalar_one_or_none()
+        if not transaction:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Transaction not found",
+            )
+        return transaction
+
     async def _get_account_for_update(
         self, db: AsyncSession, account_id: uuid.UUID
     ) -> BankAccount:
@@ -411,6 +533,119 @@ class TransactionService:
                 detail="Bank account not found",
             )
         return account
+
+    async def _get_internal_account_for_update(
+        self, db: AsyncSession, internal_account_id: uuid.UUID
+    ) -> InternalAccount:
+        statement = (
+            select(InternalAccount)
+            .where(InternalAccount.id == internal_account_id)
+            .with_for_update()
+        )
+        result = await db.execute(statement)
+        account = result.scalar_one_or_none()
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Internal account not found",
+            )
+        return account
+
+    def _get_reversal_account_targets(
+        self, original: Transaction
+    ) -> tuple[uuid.UUID | None, uuid.UUID | None]:
+        if original.transaction_type == TransactionTypeEnum.DEPOSIT:
+            return original.destination_account_id, None
+
+        if original.transaction_type == TransactionTypeEnum.WITHDRAWAL:
+            return None, original.source_account_id
+
+        if original.transaction_type == TransactionTypeEnum.TRANSFER:
+            return original.destination_account_id, original.source_account_id
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Transaction type cannot be reversed",
+        )
+
+    async def _reverse_customer_ledger_entry(
+        self,
+        db: AsyncSession,
+        original_entry: LedgerEntry,
+        reversal_transaction_id: uuid.UUID,
+        now: datetime,
+    ) -> LedgerEntry:
+        if original_entry.customer_account_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ledger entry must reference exactly one account target",
+            )
+
+        account = await self._get_account_for_update(
+            db, original_entry.customer_account_id
+        )
+
+        if original_entry.entry_type == LedgerEntryTypeEnum.DEBIT:
+            account.available_balance += original_entry.amount
+            account.current_balance += original_entry.amount
+            reversal_type = LedgerEntryTypeEnum.CREDIT
+        else:
+            if account.available_balance < original_entry.amount:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Insufficient funds to reverse transaction",
+                )
+            account.available_balance -= original_entry.amount
+            account.current_balance -= original_entry.amount
+            reversal_type = LedgerEntryTypeEnum.DEBIT
+
+        account.updated_at = now
+        db.add(account)
+
+        return LedgerEntry(
+            transaction_id=reversal_transaction_id,
+            customer_account_id=account.id,
+            entry_type=reversal_type,
+            amount=original_entry.amount,
+            currency=original_entry.currency,
+            balance_after=account.available_balance,
+        )
+
+    async def _reverse_internal_ledger_entry(
+        self,
+        db: AsyncSession,
+        original_entry: LedgerEntry,
+        reversal_transaction_id: uuid.UUID,
+        now: datetime,
+    ) -> LedgerEntry:
+        if original_entry.internal_account_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ledger entry must reference exactly one account target",
+            )
+
+        account = await self._get_internal_account_for_update(
+            db, original_entry.internal_account_id
+        )
+
+        if original_entry.entry_type == LedgerEntryTypeEnum.DEBIT:
+            account.balance -= original_entry.amount
+            reversal_type = LedgerEntryTypeEnum.CREDIT
+        else:
+            account.balance += original_entry.amount
+            reversal_type = LedgerEntryTypeEnum.DEBIT
+
+        account.updated_at = now
+        db.add(account)
+
+        return LedgerEntry(
+            transaction_id=reversal_transaction_id,
+            internal_account_id=account.id,
+            entry_type=reversal_type,
+            amount=original_entry.amount,
+            currency=original_entry.currency,
+            balance_after=account.balance,
+        )
 
     def _assert_ledger_entries_valid(self, entries: list[LedgerEntry]) -> None:
         for entry in entries:

@@ -12,6 +12,7 @@ from .schemas import (
     CustomerTransferSchema,
     AdminDepositSchema,
     AdminWithdrawalSchema,
+    TransactionReversalSchema,
     TransactionReadSchema,
 )
 from .services import transaction_service
@@ -137,4 +138,24 @@ async def admin_withdrawal(
 ):
     return await transaction_service.admin_withdrawal(
         db, current_user.user_id, payload
+    )
+
+
+@admin_transactions_router.post(
+    "/{transaction_id}/reverse",
+    response_model=TransactionReadSchema,
+    status_code=status.HTTP_201_CREATED,
+    summary="Reverse a posted transaction (Staff/Admin)",
+)
+async def reverse_transaction(
+    transaction_id: uuid.UUID,
+    payload: TransactionReversalSchema,
+    current_user: Annotated[
+        CurrentUser,
+        Depends(require_user_permission(UserPermission.REVERSE_BANK_TRANSACTIONS)),
+    ],
+    db: AsyncSession = Depends(get_session),
+):
+    return await transaction_service.reverse_transaction(
+        db, transaction_id, current_user.user_id, payload
     )
