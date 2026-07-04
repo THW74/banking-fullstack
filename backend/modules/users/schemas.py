@@ -63,3 +63,26 @@ class UserReadSchema(SQLModel):
     is_active: bool
     account_status: AccountStatusSchema
     role: RoleChoicesSchema
+
+
+class StaffUserCreateSchema(SQLModel):
+    username: str | None = Field(default=None, max_length=12)
+    email: EmailStr = Field(max_length=255)
+    full_name: str = Field(max_length=100)
+    id_no: int = Field(gt=0)
+    role: RoleChoicesSchema
+    password: str = Field(min_length=8, max_length=40)
+
+
+class AdminUserUpdateSchema(SQLModel):
+    full_name: str | None = Field(default=None, max_length=100)
+    id_no: int | None = Field(default=None, gt=0)
+
+
+class UserRoleUpdateSchema(SQLModel):
+    role: RoleChoicesSchema
+
+
+class UserStatusUpdateSchema(SQLModel):
+    account_status: AccountStatusSchema
+

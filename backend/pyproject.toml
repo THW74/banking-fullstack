@@ -13,9 +13,11 @@ dependencies = [
     "jsonpickle>=4.1.2",
     "loguru>=0.7.3",
     "psycopg[binary]>=3.3.4",
+    "pycountry>=26.2.16",
     "pwdlib[argon2]>=0.3.0",
     "pydantic-settings>=2.14.2",
     "pyjwt>=2.13.0",
+    "phonenumbers>=9.0.34",
     "redis>=8.0.1",
     "sqlmodel>=0.0.39",
     "pydantic-extra-types>=2.10.2",
@@ -26,6 +28,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
