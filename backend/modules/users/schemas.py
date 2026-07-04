@@ -45,12 +45,12 @@ class BaseUserSchema(SQLModel):
     is_active: bool = False
     is_superuser: bool = False
     security_question: SecurityQuestionsSchema = Field(max_length=30)
-    security_answer: str = Field(max_length=30)
     account_status: AccountStatusSchema = Field(default=AccountStatusSchema.INACTIVE)
     role: RoleChoicesSchema = Field(default=RoleChoicesSchema.CUSTOMER)
 
 
 class UserCreateSchema(BaseUserSchema):
+    security_answer: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=8, max_length=40)
     confirm_password: str = Field(min_length=8, max_length=40)
 
@@ -62,5 +62,11 @@ class UserCreateSchema(BaseUserSchema):
         return v
 
 
-class UserReadSchema(BaseUserSchema):
+class UserReadSchema(SQLModel):
     id: uuid.UUID
+    username: str | None
+    email: EmailStr
+    full_name: str
+    is_active: bool
+    account_status: AccountStatusSchema
+    role: RoleChoicesSchema

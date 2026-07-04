@@ -12,7 +12,6 @@ from modules.users.schemas import RoleChoicesSchema, AccountStatusSchema
 from .services import auth_service
 
 ACCESS_TOKEN_COOKIE = "access_token"
-REFRESH_TOKEN_COOKIE = "refresh_token"
 
 
 @dataclass(frozen=True)
@@ -32,11 +31,6 @@ async def get_access_token_from_cookie(
         )
     return access_token
 
-
-async def get_refresh_token_from_cookie(
-    refresh_token: str | None = Cookie(None, alias=REFRESH_TOKEN_COOKIE),
-) -> str | None:
-    return refresh_token
 
 
 async def get_current_user(
@@ -95,7 +89,5 @@ async def get_active_current_user(
     return current_user
 
 
-# --- CLEAN MODERN TYPE ALIASES ---
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 ActiveCurrentUserDep = Annotated[CurrentUser, Depends(get_active_current_user)]
-RefreshTokenDep = Annotated[str | None, Depends(get_refresh_token_from_cookie)]

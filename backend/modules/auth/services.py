@@ -1,4 +1,3 @@
-import random
 import uuid
 from datetime import datetime, timezone, timedelta
 import jwt
@@ -38,17 +37,43 @@ class AuthService:
 
 
 class OtpService:
-    def generate_otp(self, email: str) -> str:
-        otp_code = f"{random.randint(100000, 999999)}"
-        redis_client.setex(f"otp:{email}", 300, otp_code)  # 5 minutes TTL
+    def generate_otp(self, email: str, purpose: str) -> str:
+        import secrets
+
+        # Check cooldown (60s limit)
+        cooldown_key = f"otp_cooldown:{purpose}:{email}"
+        if redis_client.exists(cooldown_key):
+            raise ValueError("cooldown")
+
+        # Generate cryptographically secure OTP
+        otp_code = f"{secrets.randbelow(1_000_000):06d}"
+        
+        # Save OTP in Redis (5-minute TTL)
+        redis_client.set(f"otp:{purpose}:{email}", otp_code, ex=300)
+        # Set cooldown timer
+        redis_client.set(cooldown_key, "1", ex=60)
         return otp_code
 
-    def verify_otp(self, email: str, otp: str) -> bool:
-        key = f"otp:{email}"
-        cached_otp = redis_client.get(key)
+    def verify_otp(self, email: str, purpose: str, otp: str) -> bool:
+        attempts_key = f"otp_attempts:{purpose}:{email}"
+
+        # Check lockout (max 5 failed attempts)
+        attempts = redis_client.get(attempts_key)
+        if attempts and int(attempts) >= 5:
+            raise ValueError("lockout")
+
+        otp_key = f"otp:{purpose}:{email}"
+        cached_otp = redis_client.get(otp_key)
+
         if cached_otp and cached_otp == otp:
-            redis_client.delete(key)
+            # Successful verification: clear OTP and attempts
+            redis_client.delete(otp_key)
+            redis_client.delete(attempts_key)
             return True
+
+        # Failed attempt: increment and set TTL if new
+        redis_client.incr(attempts_key)
+        redis_client.expire(attempts_key, 300)
         return False
 
 

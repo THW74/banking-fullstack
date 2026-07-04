@@ -16,11 +16,18 @@ class UserService:
         result = await db.execute(statement)
         return result.scalar_one_or_none()
 
-    async def create_user(self, db: AsyncSession, user_in: UserCreateSchema, hashed_password: str) -> User:
+    async def create_user(
+        self,
+        db: AsyncSession,
+        user_in: UserCreateSchema,
+        hashed_password: str,
+        security_answer_hash: str,
+    ) -> User:
         db_user = User.model_validate(
             user_in,
             update={
                 "hashed_password": hashed_password,
+                "security_answer_hash": security_answer_hash,
                 "is_active": False,  # Pending OTP verification
                 "is_superuser": False,  # Default to False
             }

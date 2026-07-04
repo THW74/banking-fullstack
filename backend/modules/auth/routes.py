@@ -1,3 +1,4 @@
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,7 @@ from modules.users.services import user_service
 from .schemas import (
     LoginRequestSchema,
     OTPVerifyRequestSchema,
-    EmailRequestSchema,
+    ForgotPasswordRequestSchema,
     PasswordResetConfirmSchema,
 )
 from .services import auth_service, otp_service, redis_client
@@ -50,12 +51,23 @@ async def register(
             detail="Identification number already registered"
         )
 
-    # Hash password & create user (inactive by default)
+    # Hash password & security answer, then create user (inactive by default)
     hashed_pwd = auth_service.get_password_hash(user_in.password)
-    user = await user_service.create_user(db, user_in, hashed_pwd)
+    security_hash = auth_service.get_password_hash(user_in.security_answer.strip().lower())
+    
+    user = await user_service.create_user(db, user_in, hashed_pwd, security_hash)
 
-    # Generate OTP and send email in background
-    otp_code = otp_service.generate_otp(user.email)
+    # Generate OTP (registration scope) and send email in background
+    try:
+        otp_code = otp_service.generate_otp(user.email, "registration")
+    except ValueError as e:
+        if str(e) == "cooldown":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Please wait 60 seconds before requesting another OTP."
+            )
+        raise
+
     send_otp_email_task.delay(user.email, otp_code)
 
     return {
@@ -68,7 +80,19 @@ async def verify_otp(
     payload: OTPVerifyRequestSchema,
     db: AsyncSession = Depends(get_session)
 ):
-    is_valid = otp_service.verify_otp(payload.email, payload.otp)
+    try:
+        is_valid = otp_service.verify_otp(payload.email, payload.purpose, payload.otp)
+    except ValueError as e:
+        if str(e) == "lockout":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Too many failed attempts. Please request a new OTP."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -82,17 +106,28 @@ async def verify_otp(
             detail="User not found"
         )
 
-    if user.account_status == AccountStatusSchema.INACTIVE:
-        # Registration verification path
-        user.is_active = True
-        user.account_status = AccountStatusSchema.ACTIVE
-        db.add(user)
-        await db.commit()
-        return {"message": "Account verified successfully. You can now login."}
-    else:
-        # Password reset verification path (sets reset authorization token in Redis)
-        redis_client.setex(f"reset_token:{payload.email}", 300, "verified")
-        return {"message": "OTP verified successfully. You can now reset your password."}
+    if payload.purpose == "registration":
+        if user.account_status == AccountStatusSchema.INACTIVE:
+            user.is_active = True
+            user.account_status = AccountStatusSchema.ACTIVE
+            db.add(user)
+            await db.commit()
+            return {"message": "Account verified successfully. You can now login."}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Account is already verified."
+            )
+    else:  # password_reset
+        # Generate one-time secure random reset token
+        reset_token = secrets.token_urlsafe(32)
+        # Store hashed reset token in Redis (5-minute TTL)
+        token_hash = auth_service.get_password_hash(reset_token)
+        redis_client.set(f"reset_token:{payload.email}", token_hash, ex=300)
+        return {
+            "message": "OTP verified successfully. Use the reset token to complete password reset.",
+            "reset_token": reset_token
+        }
 
 
 @router.post("/login")
@@ -149,36 +184,56 @@ async def logout(response: Response):
 
 @router.post("/forgot-password")
 async def forgot_password(
-    payload: EmailRequestSchema,
+    payload: ForgotPasswordRequestSchema,
     db: AsyncSession = Depends(get_session)
 ):
     user = await user_service.get_by_email(db, payload.email)
     if user:
-        otp_code = otp_service.generate_otp(user.email)
+        # Verify security question and answer
+        if (
+            user.security_question != payload.security_question
+            or not auth_service.verify_password(payload.security_answer.strip().lower(), user.security_answer_hash)
+        ):
+            # To prevent user enumeration in high-security apps, return same message or raise 400
+            # Since banking credentials are high security, we throw 400 for credentials mismatch
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid email or security credentials"
+            )
+
+        # Generate password_reset scope OTP
+        try:
+            otp_code = otp_service.generate_otp(user.email, "password_reset")
+        except ValueError as e:
+            if str(e) == "cooldown":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Please wait 60 seconds before requesting another OTP."
+                )
+            raise
+
         send_otp_email_task.delay(user.email, otp_code)
 
-    # We return success message unconditionally to prevent user enumeration
     return {
-        "message": "If the email is registered, a password reset code has been sent."
+        "message": "If the email is registered and credentials match, a password reset code has been sent."
     }
 
 
 @router.post("/reset-password")
 async def reset_password(
-    email: str,
     payload: PasswordResetConfirmSchema,
     db: AsyncSession = Depends(get_session)
 ):
     # Check if reset token exists in Redis
-    reset_key = f"reset_token:{email}"
-    reset_auth = redis_client.get(reset_key)
-    if not reset_auth:
+    reset_key = f"reset_token:{payload.email}"
+    cached_hash = redis_client.get(reset_key)
+    if not cached_hash or not auth_service.verify_password(payload.reset_token, cached_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password reset session expired or invalid. Please verify OTP first."
         )
 
-    user = await user_service.get_by_email(db, email)
+    user = await user_service.get_by_email(db, payload.email)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -194,7 +249,7 @@ async def reset_password(
     db.add(user)
     await db.commit()
 
-    # Clear reset token from Redis
+    # Clear reset token from Redis (ensures one-time use)
     redis_client.delete(reset_key)
 
     return {"message": "Password reset successful."}
