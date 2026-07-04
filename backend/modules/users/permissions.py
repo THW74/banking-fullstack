@@ -16,6 +16,9 @@ class UserPermission(StrEnum):
     DELETE_USERS = "DELETE_USERS"
     READ_KYC_PROFILES = "READ_KYC_PROFILES"
     APPROVE_KYC_PROFILES = "APPROVE_KYC_PROFILES"
+    READ_BANK_ACCOUNTS = "READ_BANK_ACCOUNTS"
+    CREATE_BANK_ACCOUNTS = "CREATE_BANK_ACCOUNTS"
+    MANAGE_BANK_ACCOUNT_STATUS = "MANAGE_BANK_ACCOUNT_STATUS"
 
 
 ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
@@ -23,6 +26,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
     
     RoleChoicesSchema.TELLER: {
         UserPermission.READ_USER_DETAIL,
+        UserPermission.READ_BANK_ACCOUNTS,
     },
     
     RoleChoicesSchema.ACCOUNT_EXECUTIVE: {
@@ -30,6 +34,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_USER_DETAIL,
         UserPermission.UPDATE_CUSTOMER_PROFILE,
         UserPermission.READ_KYC_PROFILES,
+        UserPermission.READ_BANK_ACCOUNTS,
     },
     
     RoleChoicesSchema.BRANCH_MANAGER: {
@@ -39,6 +44,9 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.LOCK_USERS,
         UserPermission.READ_KYC_PROFILES,
         UserPermission.APPROVE_KYC_PROFILES,
+        UserPermission.READ_BANK_ACCOUNTS,
+        UserPermission.CREATE_BANK_ACCOUNTS,
+        UserPermission.MANAGE_BANK_ACCOUNT_STATUS,
     },
     
     RoleChoicesSchema.ADMIN: {
@@ -53,6 +61,9 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.RESET_USER_PASSWORD,
         UserPermission.READ_KYC_PROFILES,
         UserPermission.APPROVE_KYC_PROFILES,
+        UserPermission.READ_BANK_ACCOUNTS,
+        UserPermission.CREATE_BANK_ACCOUNTS,
+        UserPermission.MANAGE_BANK_ACCOUNT_STATUS,
     },
     
     RoleChoicesSchema.SUPER_ADMIN: {
@@ -69,6 +80,9 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.DELETE_USERS,
         UserPermission.READ_KYC_PROFILES,
         UserPermission.APPROVE_KYC_PROFILES,
+        UserPermission.READ_BANK_ACCOUNTS,
+        UserPermission.CREATE_BANK_ACCOUNTS,
+        UserPermission.MANAGE_BANK_ACCOUNT_STATUS,
     },
 }
 
