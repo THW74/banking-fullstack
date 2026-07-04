@@ -62,21 +62,7 @@ class CustomerProfileService:
         await db.refresh(profile)
         return profile
 
-    async def submit_profile(self, db: AsyncSession, user_id: uuid.UUID) -> CustomerProfile:
-        profile = await self.get_by_user_id(db, user_id)
-        if not profile:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Profile not found"
-            )
-
-        if profile.kyc_status not in {KycStatusEnum.DRAFT, KycStatusEnum.REJECTED}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only draft or rejected profiles can be submitted"
-            )
-
-        # Validate completeness
+    def validate_submission(self, profile: CustomerProfile) -> None:
         errors = []
 
         # Core personal details
@@ -128,6 +114,22 @@ class CustomerProfileService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Incomplete KYC data: {', '.join(errors)}"
             )
+
+    async def submit_profile(self, db: AsyncSession, user_id: uuid.UUID) -> CustomerProfile:
+        profile = await self.get_by_user_id(db, user_id)
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Profile not found"
+            )
+
+        if profile.kyc_status not in {KycStatusEnum.DRAFT, KycStatusEnum.REJECTED}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only draft or rejected profiles can be submitted"
+            )
+
+        self.validate_submission(profile)
 
         # Transition status and reset review parameters on submit/resubmit
         profile.kyc_status = KycStatusEnum.SUBMITTED

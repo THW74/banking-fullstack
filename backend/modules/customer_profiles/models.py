@@ -57,7 +57,7 @@ class CustomerProfile(SQLModel, table=True):
     kyc_status: KycStatusEnum = Field(default=KycStatusEnum.DRAFT)
     submitted_at: datetime | None = None
     reviewed_at: datetime | None = None
-    reviewed_by_user_id: uuid.UUID | None = None
+    reviewed_by_user_id: uuid.UUID | None = Field(default=None, foreign_key="users.id")
     rejection_reason: str | None = None
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
