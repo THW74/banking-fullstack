@@ -1,4 +1,5 @@
 import secrets
+from typing import Protocol, cast
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,14 @@ from .services import auth_service, otp_service, redis_client
 from .dependencies import ACCESS_TOKEN_COOKIE
 
 router = APIRouter()
+
+
+class DelayedTask(Protocol):
+    def delay(self, *args: object, **kwargs: object) -> object:
+        ...
+
+
+send_otp_email = cast(DelayedTask, send_otp_email_task)
 
 
 @router.post("/register")
@@ -68,7 +77,7 @@ async def register(
             )
         raise
 
-    send_otp_email_task.delay(user.email, otp_code)
+    send_otp_email.delay(user.email, otp_code)
 
     return {
         "message": "User registered successfully. Please verify your account with the OTP sent to your email."
@@ -205,7 +214,7 @@ async def forgot_password(
         # Generate password_reset scope OTP
         try:
             otp_code = otp_service.generate_otp(user.email, "password_reset")
-            send_otp_email_task.delay(user.email, otp_code)
+            send_otp_email.delay(user.email, otp_code)
         except ValueError:
             # Even if cooldown throws, return 200 to prevent timing-based validation leaks
             pass
@@ -223,7 +232,7 @@ async def reset_password(
     # Check if reset token exists in Redis
     reset_key = f"reset_token:{payload.email}"
     cached_hash = redis_client.get(reset_key)
-    if not cached_hash or not auth_service.verify_password(payload.reset_token, cached_hash):
+    if not isinstance(cached_hash, str) or not auth_service.verify_password(payload.reset_token, cached_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password reset session expired or invalid. Please verify OTP first."

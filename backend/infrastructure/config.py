@@ -16,17 +16,17 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    PROJECT_NAME: str
-    PROJECT_DESCRIPTION: str
-    API_V1_STR: str
-    SITE_NAME: str
+    PROJECT_NAME: str = "Banking API"
+    PROJECT_DESCRIPTION: str = "Banking backend API"
+    API_V1_STR: str = "/api/v1"
+    SITE_NAME: str = "Teknoll Bank"
 
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_DB: str = "banking"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    DATABASE_URL: str | None = None
+    DATABASE_URL: str = ""
 
     CELERY_BROKER_URL: str = "amqp://guest:guest@localhost:5672//"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     SMTP_USER: str | None = None
     SMTP_PASSWORD: str | None = None
 
-    JWT_SECRET_KEY: str
+    JWT_SECRET_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     COOKIE_SECURE: bool = True

@@ -81,7 +81,7 @@ async def test_auth_happy_path_and_edge_cases(client: AsyncClient):
 
     # Retrieve valid OTP from Redis
     otp_code = redis_client.get(f"otp:registration:{email}")
-    assert otp_code is not None
+    assert isinstance(otp_code, str)
 
     verify_payload["otp"] = otp_code
     resp = await client.post("/api/v1/auth/verify-otp", json=verify_payload)
@@ -177,7 +177,7 @@ async def test_password_reset_flow(client: AsyncClient):
 
     # Retrieve Reset OTP from Redis
     reset_otp = redis_client.get(f"otp:password_reset:{email}")
-    assert reset_otp is not None
+    assert isinstance(reset_otp, str)
 
     # Verify Reset OTP (Returns one-time reset token)
     resp = await client.post(
