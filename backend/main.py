@@ -5,8 +5,8 @@ from infrastructure.health import health_checker
 from contextlib import asynccontextmanager
 
 from modules.auth.routes import router as auth_router
-from modules.users.routes import router as users_router
-from modules.customer_profiles.routes import customer_profile_router as customer_profile_router
+from modules.users.routes import users_router, admin_router
+from modules.customer_profiles.routes import customer_profile_router, admin_kyc_router
 
 @asynccontextmanager
 async def life_span(app: FastAPI):
@@ -35,10 +35,16 @@ app = FastAPI(
 # Register module routers
 app.include_router(auth_router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
 app.include_router(users_router, prefix=settings.API_V1_STR + "/users", tags=["users"])
+app.include_router(admin_router, prefix=settings.API_V1_STR + "/admin/users", tags=["admin-users"])
 app.include_router(
     customer_profile_router,
     prefix=settings.API_V1_STR + "/customer/profile",
     tags=["customer-profiles"],
+)
+app.include_router(
+    admin_kyc_router,
+    prefix=settings.API_V1_STR + "/admin/kyc/profiles",
+    tags=["admin-kyc-profiles"],
 )
 
 @app.get("/")

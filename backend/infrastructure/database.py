@@ -5,10 +5,10 @@ from .config import settings
 # Import your models here to register them with SQLModel.metadata
 from modules.users.models import User
 from modules.customer_profiles.models import CustomerProfile
-from typing import Annotated, AsyncGenerator
+from typing import Annotated, AsyncGenerator, cast
 from fastapi import Depends
 
-engine: AsyncEngine = create_async_engine(settings.DATABASE_URL, echo=True)
+engine: AsyncEngine = create_async_engine(cast(str, settings.DATABASE_URL), echo=True)
 
 
 async def init_db():

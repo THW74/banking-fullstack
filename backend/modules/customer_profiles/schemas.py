@@ -1,6 +1,6 @@
 import uuid
 from datetime import date, datetime
-from pydantic import BaseModel, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from pydantic_extra_types.country import CountryAlpha2
 from pydantic_extra_types.phone_numbers import PhoneNumber
 
@@ -124,3 +124,11 @@ class CustomerProfileSummarySchema(BaseModel):
     submitted_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AdminCustomerProfileResponseSchema(CustomerProfileResponseSchema):
+    reviewed_by_user_id: uuid.UUID | None
+
+
+class KycRejectionSchema(BaseModel):
+    rejection_reason: str = Field(..., min_length=1, max_length=500)
