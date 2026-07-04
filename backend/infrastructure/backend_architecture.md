@@ -98,3 +98,4 @@ Below is the list of web consoles and API endpoints available in the local devel
 - **Dockerfile**: Application image parameters defined in [Dockerfile](file:///d:/python/banking-fullstack/backend/Dockerfile).
 - **Database Engine & Sessions**: Declared in [database.py](file:///d:/python/banking-fullstack/backend/infrastructure/database.py).
 - **Celery Application**: Declared in [celery.py](file:///d:/python/banking-fullstack/backend/infrastructure/celery.py).
+- **Docker Exclusions**: Rules defined in [.dockerignore](file:///d:/python/banking-fullstack/backend/.dockerignore) to prevent copying local virtual environments, secrets, logs, and temp cache files into container builds.
