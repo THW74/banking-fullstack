@@ -14,6 +14,8 @@ class UserPermission(StrEnum):
     UNLOCK_USERS = "UNLOCK_USERS"
     RESET_USER_PASSWORD = "RESET_USER_PASSWORD"
     DELETE_USERS = "DELETE_USERS"
+    READ_KYC_PROFILES = "READ_KYC_PROFILES"
+    APPROVE_KYC_PROFILES = "APPROVE_KYC_PROFILES"
 
 
 ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
@@ -27,6 +29,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_USERS,
         UserPermission.READ_USER_DETAIL,
         UserPermission.UPDATE_CUSTOMER_PROFILE,
+        UserPermission.READ_KYC_PROFILES,
     },
     
     RoleChoicesSchema.BRANCH_MANAGER: {
@@ -34,6 +37,8 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_USER_DETAIL,
         UserPermission.UPDATE_CUSTOMER_PROFILE,
         UserPermission.LOCK_USERS,
+        UserPermission.READ_KYC_PROFILES,
+        UserPermission.APPROVE_KYC_PROFILES,
     },
     
     RoleChoicesSchema.ADMIN: {
@@ -46,6 +51,8 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.LOCK_USERS,
         UserPermission.UNLOCK_USERS,
         UserPermission.RESET_USER_PASSWORD,
+        UserPermission.READ_KYC_PROFILES,
+        UserPermission.APPROVE_KYC_PROFILES,
     },
     
     RoleChoicesSchema.SUPER_ADMIN: {
@@ -60,6 +67,8 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.UNLOCK_USERS,
         UserPermission.RESET_USER_PASSWORD,
         UserPermission.DELETE_USERS,
+        UserPermission.READ_KYC_PROFILES,
+        UserPermission.APPROVE_KYC_PROFILES,
     },
 }
 

@@ -76,7 +76,7 @@ class UserService:
     async def list_users(self, db: AsyncSession, skip: int = 0, limit: int = 100) -> list[User]:
         statement = select(User).offset(skip).limit(limit)
         result = await db.execute(statement)
-        return result.scalars().all()
+        return list(result.scalars().all())
 
     def ensure_actor_is_not_target(self, actor: CurrentUser, target_id: uuid.UUID) -> None:
         if actor.user_id == target_id:

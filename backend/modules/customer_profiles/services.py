@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime, timezone
 from fastapi import HTTPException, status
-from sqlmodel import select
+from sqlmodel import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import CustomerProfile
@@ -137,6 +137,91 @@ class CustomerProfileService:
         profile.rejection_reason = None
         profile.reviewed_at = None
         profile.reviewed_by_user_id = None
+        profile.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        db.add(profile)
+        await db.commit()
+        await db.refresh(profile)
+        return profile
+
+    async def list_profiles_for_review(
+        self, db: AsyncSession, kyc_status: KycStatusEnum | None = None, limit: int = 50, offset: int = 0
+    ) -> list[CustomerProfile]:
+        statement = select(CustomerProfile)
+        if kyc_status:
+            statement = statement.where(CustomerProfile.kyc_status == kyc_status)
+        statement = statement.order_by(desc(CustomerProfile.submitted_at).nulls_last())
+        statement = statement.offset(offset).limit(limit)
+        result = await db.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_profile_by_id_for_admin(self, db: AsyncSession, profile_id: uuid.UUID) -> CustomerProfile:
+        statement = select(CustomerProfile).where(CustomerProfile.id == profile_id)
+        result = await db.execute(statement)
+        profile = result.scalar_one_or_none()
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Profile not found"
+            )
+        return profile
+
+    async def mark_under_review(self, db: AsyncSession, profile_id: uuid.UUID, reviewer_id: uuid.UUID) -> CustomerProfile:
+        profile = await self.get_profile_by_id_for_admin(db, profile_id)
+        if profile.kyc_status != KycStatusEnum.SUBMITTED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only submitted profiles can be transitioned to under review"
+            )
+
+        profile.kyc_status = KycStatusEnum.UNDER_REVIEW
+        profile.reviewed_by_user_id = reviewer_id
+        profile.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        db.add(profile)
+        await db.commit()
+        await db.refresh(profile)
+        return profile
+
+    async def approve_profile(self, db: AsyncSession, profile_id: uuid.UUID, reviewer_id: uuid.UUID) -> CustomerProfile:
+        profile = await self.get_profile_by_id_for_admin(db, profile_id)
+        if profile.kyc_status not in {KycStatusEnum.SUBMITTED, KycStatusEnum.UNDER_REVIEW}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only submitted or under review profiles can be approved"
+            )
+
+        profile.kyc_status = KycStatusEnum.APPROVED
+        profile.reviewed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        profile.reviewed_by_user_id = reviewer_id
+        profile.rejection_reason = None
+        profile.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        db.add(profile)
+        await db.commit()
+        await db.refresh(profile)
+        return profile
+
+    async def reject_profile(
+        self, db: AsyncSession, profile_id: uuid.UUID, reviewer_id: uuid.UUID, rejection_reason: str
+    ) -> CustomerProfile:
+        profile = await self.get_profile_by_id_for_admin(db, profile_id)
+        if profile.kyc_status not in {KycStatusEnum.SUBMITTED, KycStatusEnum.UNDER_REVIEW}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only submitted or under review profiles can be rejected"
+            )
+
+        if not rejection_reason or not rejection_reason.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Rejection reason is required"
+            )
+
+        profile.kyc_status = KycStatusEnum.REJECTED
+        profile.rejection_reason = rejection_reason.strip()
+        profile.reviewed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        profile.reviewed_by_user_id = reviewer_id
         profile.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         db.add(profile)
