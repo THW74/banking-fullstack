@@ -12,6 +12,7 @@ from .schemas import (
     CustomerTransferSchema,
     AdminDepositSchema,
     AdminWithdrawalSchema,
+    LedgerEntryReadSchema,
     TransactionReversalSchema,
     TransactionReadSchema,
 )
@@ -34,6 +35,21 @@ async def list_customer_transactions(
     db: AsyncSession = Depends(get_session),
 ):
     return await transaction_service.list_transactions_for_user(db, current_user.user_id)
+
+
+@customer_transactions_router.get(
+    "/{transaction_id}/ledger-entries",
+    response_model=list[LedgerEntryReadSchema],
+    summary="Get customer transaction ledger entries",
+)
+async def get_customer_transaction_ledger_entries(
+    transaction_id: uuid.UUID,
+    current_user: ActiveCurrentUserDep,
+    db: AsyncSession = Depends(get_session),
+):
+    return await transaction_service.get_ledger_entries_for_transaction_user(
+        db, transaction_id, current_user.user_id
+    )
 
 
 @customer_transactions_router.get(
@@ -85,6 +101,24 @@ async def list_all_transactions(
     db: AsyncSession = Depends(get_session),
 ):
     return await transaction_service.list_all_transactions(db, limit, offset)
+
+
+@admin_transactions_router.get(
+    "/{transaction_id}/ledger-entries",
+    response_model=list[LedgerEntryReadSchema],
+    summary="Get transaction ledger entries (Staff/Admin)",
+)
+async def get_transaction_ledger_entries_for_admin(
+    transaction_id: uuid.UUID,
+    current_user: Annotated[
+        CurrentUser,
+        Depends(require_user_permission(UserPermission.READ_TRANSACTIONS)),
+    ],
+    db: AsyncSession = Depends(get_session),
+):
+    return await transaction_service.get_ledger_entries_for_transaction_admin(
+        db, transaction_id
+    )
 
 
 @admin_transactions_router.get(

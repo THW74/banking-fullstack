@@ -495,6 +495,20 @@ class TransactionService:
         result = await db.execute(statement)
         return list(result.scalars().all())
 
+    async def get_ledger_entries_for_transaction_user(
+        self, db: AsyncSession, transaction_id: uuid.UUID, user_id: uuid.UUID
+    ) -> list[LedgerEntry]:
+        transaction = await self.get_transaction_for_user(
+            db, transaction_id, user_id
+        )
+        return await self.get_ledger_entries_for_transaction(db, transaction.id)
+
+    async def get_ledger_entries_for_transaction_admin(
+        self, db: AsyncSession, transaction_id: uuid.UUID
+    ) -> list[LedgerEntry]:
+        transaction = await self.get_transaction_by_id(db, transaction_id)
+        return await self.get_ledger_entries_for_transaction(db, transaction.id)
+
     # ------------------------------------------------------------------ #
     #  Internal helpers                                                    #
     # ------------------------------------------------------------------ #
