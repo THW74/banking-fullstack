@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from modules.auth.routes import router as auth_router
 from modules.users.routes import users_router, admin_router
 from modules.customer_profiles.routes import customer_profile_router, admin_kyc_router
+from modules.next_of_kin.routes import next_of_kin_router
 
 @asynccontextmanager
 async def life_span(app: FastAPI):
@@ -45,6 +46,11 @@ app.include_router(
     admin_kyc_router,
     prefix=settings.API_V1_STR + "/admin/kyc/profiles",
     tags=["admin-kyc-profiles"],
+)
+app.include_router(
+    next_of_kin_router,
+    prefix=settings.API_V1_STR + "/customer/next-of-kin",
+    tags=["next-of-kin"],
 )
 
 @app.get("/")

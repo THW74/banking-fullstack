@@ -77,7 +77,7 @@ async def register(
             )
         raise
 
-    send_otp_email.delay(user.email, otp_code)
+    send_otp_email.delay(user.email, otp_code)  # type: ignore
 
     return {
         "message": "User registered successfully. Please verify your account with the OTP sent to your email."
@@ -214,7 +214,7 @@ async def forgot_password(
         # Generate password_reset scope OTP
         try:
             otp_code = otp_service.generate_otp(user.email, "password_reset")
-            send_otp_email.delay(user.email, otp_code)
+            send_otp_email.delay(user.email, otp_code)  # type: ignore
         except ValueError:
             # Even if cooldown throws, return 200 to prevent timing-based validation leaks
             pass

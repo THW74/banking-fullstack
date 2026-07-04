@@ -1,4 +1,5 @@
 import uuid
+from typing import cast
 import pytest
 from httpx import AsyncClient
 from modules.auth.services import redis_client
@@ -83,7 +84,7 @@ async def test_auth_happy_path_and_edge_cases(client: AsyncClient):
     otp_code = redis_client.get(f"otp:registration:{email}")
     assert isinstance(otp_code, str)
 
-    verify_payload["otp"] = otp_code
+    verify_payload["otp"] = cast(str, otp_code)
     resp = await client.post("/api/v1/auth/verify-otp", json=verify_payload)
     assert resp.status_code == 200
     assert "verified successfully" in resp.json()["message"]

@@ -8,8 +8,12 @@ from infrastructure.database import init_db
 @pytest.fixture(scope="session", autouse=True)
 async def setup_db():
     from sqlmodel import SQLModel
+    from sqlalchemy import text
     from infrastructure.database import engine
     async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE IF EXISTS \"next_of_kin\" CASCADE;"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"users\" CASCADE;"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"user\" CASCADE;"))
         await conn.run_sync(SQLModel.metadata.drop_all)
     await init_db()
 
