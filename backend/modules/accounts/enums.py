@@ -24,3 +24,4 @@ class AccountStatusEnum(str, Enum):
 
 class InternalAccountTypeEnum(str, Enum):
     CASH_SETTLEMENT = "cash_settlement"
+    FEE_INCOME = "fee_income"
