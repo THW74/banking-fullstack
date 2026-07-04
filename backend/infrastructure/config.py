@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     SMTP_USER: str | None = None
     SMTP_PASSWORD: str | None = None
 
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    COOKIE_SECURE: bool = True
+
     @model_validator(mode="before")
     @classmethod
     def remove_empty_strings(cls, values: dict) -> dict:
@@ -44,13 +49,22 @@ class Settings(BaseSettings):
         return values
 
     @model_validator(mode="after")
-    def assemble_db_connection(self) -> "Settings":
+    def assemble_settings(self) -> "Settings":
         if (
             not self.DATABASE_URL 
             or "${" in self.DATABASE_URL 
             or self.DATABASE_URL.strip() in ("", "postgresql+asyncpg://:@:/")
         ):
             self.DATABASE_URL = f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+        if not getattr(self, "JWT_SECRET_KEY", None) or self.JWT_SECRET_KEY.strip() in (
+            "secret-key-placeholder-change-in-production",
+            "change-me",
+            "",
+        ):
+            raise ValueError(
+                "JWT_SECRET_KEY is insecure or missing! Please set a secure key in the environment."
+            )
         return self
 
 

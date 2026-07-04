@@ -4,6 +4,9 @@ from infrastructure.database import init_db
 from infrastructure.health import health_checker
 from contextlib import asynccontextmanager
 
+from modules.auth.routes import router as auth_router
+from modules.users.routes import router as users_router
+
 @asynccontextmanager
 async def life_span(app: FastAPI):
     print("Starting up...")
@@ -27,6 +30,10 @@ app = FastAPI(
     openapi_url=settings.API_V1_STR + "/openapi.json",
     lifespan=life_span,
 )
+
+# Register module routers
+app.include_router(auth_router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
+app.include_router(users_router, prefix=settings.API_V1_STR + "/users", tags=["users"])
 
 @app.get("/")
 def main():

@@ -2,9 +2,8 @@ from sqlmodel import SQLModel, Session
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 from sqlmodel.ext.asyncio.session import AsyncSession
 from .config import settings
-# TODO: Import your models here to register them with SQLModel.metadata
-# from modules.users.models import User
-# from modules.auth.models import RefreshToken
+# Import your models here to register them with SQLModel.metadata
+from modules.users.models import User
 from typing import Annotated, AsyncGenerator
 from fastapi import Depends
 

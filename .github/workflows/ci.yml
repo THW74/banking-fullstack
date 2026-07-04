@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: banking
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "backend/pyproject.toml"
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/banking
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          JWT_SECRET_KEY: test-secure-jwt-secret-key-1234567890-test
+          COOKIE_SECURE: "False"
+          PROJECT_NAME: "Teknoll"
+          PROJECT_DESCRIPTION: "Banking App with FastAPI"
+          API_V1_STR: "/api/v1"
+          SITE_NAME: "Teknoll Bank"
+        run: |
+          cd backend
+          uv sync
+          uv run python -m pytest
