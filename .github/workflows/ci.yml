@@ -50,6 +50,10 @@ jobs:
           CELERY_RESULT_BACKEND: redis://localhost:6379/0
           JWT_SECRET_KEY: test-secure-jwt-secret-key-1234567890-test
           COOKIE_SECURE: "False"
+          PROJECT_NAME: "Teknoll"
+          PROJECT_DESCRIPTION: "Banking App with FastAPI"
+          API_V1_STR: "/api/v1"
+          SITE_NAME: "Teknoll Bank"
         run: |
           cd backend
           uv sync
