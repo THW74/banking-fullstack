@@ -4,10 +4,11 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from .config import settings
 # Import your models here to register them with SQLModel.metadata
 from modules.users.models import User
-from typing import Annotated, AsyncGenerator
+from modules.next_of_kin.models import NextOfKin
+from typing import Annotated, AsyncGenerator, cast
 from fastapi import Depends
 
-engine: AsyncEngine = create_async_engine(settings.DATABASE_URL, echo=True)
+engine: AsyncEngine = create_async_engine(cast(str, settings.DATABASE_URL), echo=True)
 
 
 async def init_db():

@@ -1,4 +1,5 @@
 import uuid
+from typing import cast
 import pytest
 from httpx import AsyncClient
 from modules.auth.services import redis_client
@@ -11,7 +12,7 @@ pytestmark = pytest.mark.asyncio
 async def test_rejects_placeholder_jwt_secret(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "secret-key-placeholder-change-in-production")
     with pytest.raises(ValueError) as exc:
-        Settings()
+        Settings()  # pyright: ignore [reportCallIssue]
     assert "JWT_SECRET_KEY is insecure or missing" in str(exc.value)
 
 
@@ -83,7 +84,7 @@ async def test_auth_happy_path_and_edge_cases(client: AsyncClient):
     otp_code = redis_client.get(f"otp:registration:{email}")
     assert otp_code is not None
 
-    verify_payload["otp"] = otp_code
+    verify_payload["otp"] = cast(str, otp_code)
     resp = await client.post("/api/v1/auth/verify-otp", json=verify_payload)
     assert resp.status_code == 200
     assert "verified successfully" in resp.json()["message"]
