@@ -211,6 +211,13 @@ async def test_admin_can_reverse_deposit_and_restore_balances(client: AsyncClien
         )
         await create_approved_profile(db, customer.id)
         account = await create_active_account(db, customer.id, Decimal("1000.00"))
+        cash_result = await db.execute(
+            select(InternalAccount).where(InternalAccount.account_code == "CASH-USD")
+        )
+        cash_account = cash_result.scalar_one_or_none()
+        cash_baseline = (
+            cash_account.balance if cash_account is not None else Decimal("0.00")
+        )
 
     admin_cookie = await login_and_get_cookie(client, admin.email)
     customer_cookie = await login_and_get_cookie(client, customer.email)
@@ -251,7 +258,7 @@ async def test_admin_can_reverse_deposit_and_restore_balances(client: AsyncClien
             select(InternalAccount).where(InternalAccount.account_code == "CASH-USD")
         )
         cash_account = cash_result.scalar_one()
-        assert cash_account.balance == Decimal("0.00")
+        assert cash_account.balance == cash_baseline
 
         original_txn = await db.get(Transaction, uuid.UUID(original["id"]))
         assert original_txn is not None
@@ -312,6 +319,13 @@ async def test_branch_manager_can_reverse_withdrawal(client: AsyncClient):
         )
         await create_approved_profile(db, customer.id)
         account = await create_active_account(db, customer.id, Decimal("1000.00"))
+        cash_result = await db.execute(
+            select(InternalAccount).where(InternalAccount.account_code == "CASH-USD")
+        )
+        cash_account = cash_result.scalar_one_or_none()
+        cash_baseline = (
+            cash_account.balance if cash_account is not None else Decimal("0.00")
+        )
 
     admin_cookie = await login_and_get_cookie(client, admin.email)
     manager_cookie = await login_and_get_cookie(client, manager.email)
@@ -349,7 +363,7 @@ async def test_branch_manager_can_reverse_withdrawal(client: AsyncClient):
             select(InternalAccount).where(InternalAccount.account_code == "CASH-USD")
         )
         cash_account = cash_result.scalar_one()
-        assert cash_account.balance == Decimal("0.00")
+        assert cash_account.balance == cash_baseline
 
         original_txn = await db.get(Transaction, uuid.UUID(original["id"]))
         assert original_txn is not None
