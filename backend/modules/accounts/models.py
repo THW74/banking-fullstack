@@ -3,7 +3,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 from sqlmodel import Field, SQLModel
-from .enums import AccountTypeEnum, AccountCurrencyEnum, AccountStatusEnum
+from .enums import (
+    AccountCurrencyEnum,
+    AccountStatusEnum,
+    AccountTypeEnum,
+    InternalAccountTypeEnum,
+)
 
 
 class BankAccount(SQLModel, table=True):
@@ -27,6 +32,21 @@ class BankAccount(SQLModel, table=True):
 
     opened_at: datetime | None = None
     closed_at: datetime | None = None
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+
+class InternalAccount(SQLModel, table=True):
+    __tablename__: Any = "internal_accounts"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    account_code: str = Field(unique=True, index=True, nullable=False, max_length=64)
+    account_name: str = Field(max_length=100, nullable=False)
+    account_type: InternalAccountTypeEnum = Field(nullable=False)
+    currency: AccountCurrencyEnum = Field(nullable=False)
+    balance: Decimal = Field(default=Decimal("0.00"), max_digits=18, decimal_places=2)
+    is_active: bool = Field(default=True)
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))

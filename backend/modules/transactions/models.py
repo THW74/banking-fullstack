@@ -46,8 +46,11 @@ class LedgerEntry(SQLModel, table=True):
     transaction_id: uuid.UUID = Field(
         foreign_key="transactions.id", index=True, nullable=False
     )
-    account_id: uuid.UUID = Field(
-        foreign_key="bank_accounts.id", index=True, nullable=False
+    customer_account_id: uuid.UUID | None = Field(
+        default=None, foreign_key="bank_accounts.id", index=True
+    )
+    internal_account_id: uuid.UUID | None = Field(
+        default=None, foreign_key="internal_accounts.id", index=True
     )
 
     entry_type: LedgerEntryTypeEnum = Field(nullable=False)

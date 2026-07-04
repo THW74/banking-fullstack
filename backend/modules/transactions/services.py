@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.accounts.models import BankAccount
 from modules.accounts.enums import AccountStatusEnum
+from modules.accounts.services import internal_account_service
 from .models import Transaction, LedgerEntry
 from .enums import TransactionTypeEnum, TransactionStatusEnum, LedgerEntryTypeEnum
 from .schemas import CustomerTransferSchema, AdminDepositSchema, AdminWithdrawalSchema
@@ -20,9 +21,9 @@ class TransactionService:
         DEBIT  = money decreases from a customer account
         CREDIT = money increases to a customer account
 
-    For transfers, total DEBIT amount must equal total CREDIT amount.
-    For deposits/withdrawals, PR #6 uses single-sided ledger entries.
-    TODO: Introduce internal settlement accounts for full double-entry accounting.
+    Internal cash settlement entries are used to keep deposits and
+    withdrawals balanced. Every posted transaction must have equal total
+    DEBIT and CREDIT amounts.
     """
 
     # ------------------------------------------------------------------ #
@@ -113,7 +114,7 @@ class TransactionService:
         # Create ledger entries (DEBIT on source, CREDIT on destination)
         debit_entry = LedgerEntry(
             transaction_id=transaction.id,
-            account_id=source.id,
+            customer_account_id=source.id,
             entry_type=LedgerEntryTypeEnum.DEBIT,
             amount=schema.amount,
             currency=source.currency,
@@ -121,19 +122,21 @@ class TransactionService:
         )
         credit_entry = LedgerEntry(
             transaction_id=transaction.id,
-            account_id=destination.id,
+            customer_account_id=destination.id,
             entry_type=LedgerEntryTypeEnum.CREDIT,
             amount=schema.amount,
             currency=destination.currency,
             balance_after=destination.available_balance,
         )
+        entries = [debit_entry, credit_entry]
+        self._assert_ledger_entries_valid(entries)
 
         db.add(source)
         db.add(destination)
         db.add(transaction)
         await db.flush()  # Flush transaction row so FK on ledger_entries is satisfied
-        db.add(debit_entry)
-        db.add(credit_entry)
+        for entry in entries:
+            db.add(entry)
         await db.commit()
         await db.refresh(transaction)
         return transaction
@@ -146,9 +149,7 @@ class TransactionService:
     ) -> Transaction:
         """Admin/staff deposit into a customer account.
 
-        Creates a single CREDIT ledger entry. No internal settlement account
-        exists yet, so this is single-sided.
-        TODO: Introduce settlement account for full double-entry.
+        Creates a balanced internal cash DEBIT and customer CREDIT entry.
         """
         destination = await self._get_account_for_update(db, schema.destination_account_id)
 
@@ -160,8 +161,15 @@ class TransactionService:
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         reference = await self._generate_unique_reference(db)
+        cash_account = (
+            await internal_account_service.get_or_create_cash_settlement_account(
+                db, destination.currency
+            )
+        )
 
-        # Update balance
+        # Update balances
+        cash_account.balance += schema.amount
+        cash_account.updated_at = now
         destination.available_balance += schema.amount
         destination.current_balance += schema.amount
         destination.updated_at = now
@@ -180,20 +188,32 @@ class TransactionService:
             posted_at=now,
         )
 
-        # Single CREDIT ledger entry
+        # Balanced ledger entries: DEBIT internal cash, CREDIT customer account
+        cash_entry = LedgerEntry(
+            transaction_id=transaction.id,
+            internal_account_id=cash_account.id,
+            entry_type=LedgerEntryTypeEnum.DEBIT,
+            amount=schema.amount,
+            currency=destination.currency,
+            balance_after=cash_account.balance,
+        )
         credit_entry = LedgerEntry(
             transaction_id=transaction.id,
-            account_id=destination.id,
+            customer_account_id=destination.id,
             entry_type=LedgerEntryTypeEnum.CREDIT,
             amount=schema.amount,
             currency=destination.currency,
             balance_after=destination.available_balance,
         )
+        entries = [cash_entry, credit_entry]
+        self._assert_ledger_entries_valid(entries)
 
+        db.add(cash_account)
         db.add(destination)
         db.add(transaction)
         await db.flush()  # Flush transaction row so FK on ledger_entries is satisfied
-        db.add(credit_entry)
+        for entry in entries:
+            db.add(entry)
         await db.commit()
         await db.refresh(transaction)
         return transaction
@@ -206,9 +226,7 @@ class TransactionService:
     ) -> Transaction:
         """Admin/staff withdrawal from a customer account.
 
-        Creates a single DEBIT ledger entry. No internal settlement account
-        exists yet, so this is single-sided.
-        TODO: Introduce settlement account for full double-entry.
+        Creates a balanced customer DEBIT and internal cash CREDIT entry.
         """
         source = await self._get_account_for_update(db, schema.source_account_id)
 
@@ -226,11 +244,18 @@ class TransactionService:
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         reference = await self._generate_unique_reference(db)
+        cash_account = (
+            await internal_account_service.get_or_create_cash_settlement_account(
+                db, source.currency
+            )
+        )
 
-        # Update balance
+        # Update balances
         source.available_balance -= schema.amount
         source.current_balance -= schema.amount
         source.updated_at = now
+        cash_account.balance -= schema.amount
+        cash_account.updated_at = now
 
         # Create transaction
         transaction = Transaction(
@@ -246,20 +271,32 @@ class TransactionService:
             posted_at=now,
         )
 
-        # Single DEBIT ledger entry
+        # Balanced ledger entries: DEBIT customer account, CREDIT internal cash
         debit_entry = LedgerEntry(
             transaction_id=transaction.id,
-            account_id=source.id,
+            customer_account_id=source.id,
             entry_type=LedgerEntryTypeEnum.DEBIT,
             amount=schema.amount,
             currency=source.currency,
             balance_after=source.available_balance,
         )
+        cash_entry = LedgerEntry(
+            transaction_id=transaction.id,
+            internal_account_id=cash_account.id,
+            entry_type=LedgerEntryTypeEnum.CREDIT,
+            amount=schema.amount,
+            currency=source.currency,
+            balance_after=cash_account.balance,
+        )
+        entries = [debit_entry, cash_entry]
+        self._assert_ledger_entries_valid(entries)
 
+        db.add(cash_account)
         db.add(source)
         db.add(transaction)
         await db.flush()  # Flush transaction row so FK on ledger_entries is satisfied
-        db.add(debit_entry)
+        for entry in entries:
+            db.add(entry)
         await db.commit()
         await db.refresh(transaction)
         return transaction
@@ -374,6 +411,45 @@ class TransactionService:
                 detail="Bank account not found",
             )
         return account
+
+    def _assert_ledger_entries_valid(self, entries: list[LedgerEntry]) -> None:
+        for entry in entries:
+            self._assert_single_ledger_target(entry)
+        self._assert_ledger_entries_balanced(entries)
+
+    def _assert_single_ledger_target(self, entry: LedgerEntry) -> None:
+        has_customer = entry.customer_account_id is not None
+        has_internal = entry.internal_account_id is not None
+
+        if has_customer == has_internal:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ledger entry must reference exactly one account target",
+            )
+
+    def _assert_ledger_entries_balanced(self, entries: list[LedgerEntry]) -> None:
+        total_debit = sum(
+            (
+                entry.amount
+                for entry in entries
+                if entry.entry_type == LedgerEntryTypeEnum.DEBIT
+            ),
+            Decimal("0.00"),
+        )
+        total_credit = sum(
+            (
+                entry.amount
+                for entry in entries
+                if entry.entry_type == LedgerEntryTypeEnum.CREDIT
+            ),
+            Decimal("0.00"),
+        )
+
+        if total_debit != total_credit:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ledger entries are not balanced",
+            )
 
     async def _generate_unique_reference(self, db: AsyncSession) -> str:
         """Generate a unique transaction reference string."""

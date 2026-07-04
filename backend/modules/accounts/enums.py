@@ -20,3 +20,7 @@ class AccountStatusEnum(str, Enum):
     ACTIVE = "active"
     FROZEN = "frozen"
     CLOSED = "closed"
+
+
+class InternalAccountTypeEnum(str, Enum):
+    CASH_SETTLEMENT = "cash_settlement"

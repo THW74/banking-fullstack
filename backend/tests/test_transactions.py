@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,9 +20,10 @@ from modules.customer_profiles.enums import (
 )
 from modules.customer_profiles.models import CustomerProfile
 from modules.accounts.enums import AccountTypeEnum, AccountCurrencyEnum, AccountStatusEnum
-from modules.accounts.models import BankAccount
+from modules.accounts.models import BankAccount, InternalAccount
 from modules.transactions.enums import TransactionTypeEnum, LedgerEntryTypeEnum
 from modules.transactions.models import Transaction, LedgerEntry
+from modules.transactions.services import transaction_service
 from modules.auth.services import auth_service
 
 pytestmark = pytest.mark.asyncio
@@ -116,6 +118,33 @@ async def create_active_account(
     return account
 
 
+def assert_entries_are_balanced(entries: list[LedgerEntry]) -> None:
+    total_debit = sum(
+        (
+            entry.amount
+            for entry in entries
+            if entry.entry_type == LedgerEntryTypeEnum.DEBIT
+        ),
+        Decimal("0.00"),
+    )
+    total_credit = sum(
+        (
+            entry.amount
+            for entry in entries
+            if entry.entry_type == LedgerEntryTypeEnum.CREDIT
+        ),
+        Decimal("0.00"),
+    )
+    assert total_debit == total_credit
+
+
+def assert_entries_have_single_target(entries: list[LedgerEntry]) -> None:
+    for entry in entries:
+        has_customer = entry.customer_account_id is not None
+        has_internal = entry.internal_account_id is not None
+        assert has_customer != has_internal
+
+
 # --- Main test ---
 
 
@@ -177,15 +206,52 @@ async def test_transactions_scenarios(client: AsyncClient):
     assert Decimal(resp.json()["available_balance"]) == Decimal("5500.00")
     assert Decimal(resp.json()["current_balance"]) == Decimal("5500.00")
 
-    # --- 3. Verify deposit created CREDIT ledger entry ---
+    # --- 3. Verify deposit created balanced internal DEBIT + customer CREDIT ---
     async with AsyncSession(engine, expire_on_commit=False) as db:
+        cash_stmt = select(InternalAccount).where(
+            InternalAccount.account_code == "CASH-USD"
+        )
+        cash_result = await db.execute(cash_stmt)
+        cash_account = cash_result.scalar_one()
+        assert cash_account.currency == AccountCurrencyEnum.USD
+        assert cash_account.balance == Decimal("500.00")
+
         entries_stmt = select(LedgerEntry).where(LedgerEntry.transaction_id == uuid.UUID(deposit_txn["id"]))
         entries_result = await db.execute(entries_stmt)
         entries = list(entries_result.scalars().all())
-        assert len(entries) == 1
-        assert entries[0].entry_type == LedgerEntryTypeEnum.CREDIT
-        assert entries[0].amount == Decimal("500.00")
-        assert entries[0].balance_after == Decimal("5500.00")
+        assert len(entries) == 2
+        assert_entries_are_balanced(entries)
+        assert_entries_have_single_target(entries)
+
+        debit = [e for e in entries if e.entry_type == LedgerEntryTypeEnum.DEBIT]
+        credit = [e for e in entries if e.entry_type == LedgerEntryTypeEnum.CREDIT]
+        assert len(debit) == 1
+        assert len(credit) == 1
+        assert debit[0].amount == credit[0].amount == Decimal("500.00")
+        assert debit[0].internal_account_id == cash_account.id
+        assert debit[0].customer_account_id is None
+        assert debit[0].balance_after == Decimal("500.00")
+        assert credit[0].customer_account_id == acct_a1.id
+        assert credit[0].internal_account_id is None
+        assert credit[0].balance_after == Decimal("5500.00")
+
+    # Verify settlement accounts are currency-specific.
+    client.cookies.clear()
+    client.cookies.update(admin_cookie)
+    resp = await client.post("/api/v1/admin/transactions/deposit", json={
+        "destination_account_id": str(acct_a_eur.id),
+        "amount": "25.00",
+        "description": "EUR cash settlement seed",
+    })
+    assert resp.status_code == 201
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        cash_stmt = select(InternalAccount).where(
+            InternalAccount.account_code == "CASH-EUR"
+        )
+        cash_result = await db.execute(cash_stmt)
+        cash_account = cash_result.scalar_one()
+        assert cash_account.currency == AccountCurrencyEnum.EUR
+        assert cash_account.balance == Decimal("25.00")
 
     # --- 4. Customer A transfers to own account (acct_a1 -> acct_a2) ---
     client.cookies.clear()
@@ -216,13 +282,19 @@ async def test_transactions_scenarios(client: AsyncClient):
         entries_result = await db.execute(entries_stmt)
         entries = list(entries_result.scalars().all())
         assert len(entries) == 2
+        assert_entries_are_balanced(entries)
+        assert_entries_have_single_target(entries)
         debit = [e for e in entries if e.entry_type == LedgerEntryTypeEnum.DEBIT]
         credit = [e for e in entries if e.entry_type == LedgerEntryTypeEnum.CREDIT]
         assert len(debit) == 1
         assert len(credit) == 1
         # Total DEBIT must equal total CREDIT
         assert debit[0].amount == credit[0].amount == Decimal("1500.00")
+        assert debit[0].customer_account_id == acct_a1.id
+        assert debit[0].internal_account_id is None
         assert debit[0].balance_after == Decimal("4000.00")
+        assert credit[0].customer_account_id == acct_a2.id
+        assert credit[0].internal_account_id is None
         assert credit[0].balance_after == Decimal("2500.00")
 
     # --- 6. Customer A transfers to customer B's account ---
@@ -326,17 +398,35 @@ async def test_transactions_scenarios(client: AsyncClient):
     resp = await client.get(f"/api/v1/customer/accounts/{acct_a1.id}")
     assert Decimal(resp.json()["available_balance"]) == Decimal("3500.00")
 
-    # --- 13. Verify withdrawal created DEBIT ledger entry ---
+    # --- 13. Verify withdrawal created balanced customer DEBIT + internal CREDIT ---
     async with AsyncSession(engine, expire_on_commit=False) as db:
+        cash_stmt = select(InternalAccount).where(
+            InternalAccount.account_code == "CASH-USD"
+        )
+        cash_result = await db.execute(cash_stmt)
+        cash_account = cash_result.scalar_one()
+        assert cash_account.balance == Decimal("200.00")
+
         entries_stmt = select(LedgerEntry).where(
             LedgerEntry.transaction_id == uuid.UUID(withdrawal_txn["id"])
         )
         entries_result = await db.execute(entries_stmt)
         entries = list(entries_result.scalars().all())
-        assert len(entries) == 1
-        assert entries[0].entry_type == LedgerEntryTypeEnum.DEBIT
-        assert entries[0].amount == Decimal("300.00")
-        assert entries[0].balance_after == Decimal("3500.00")
+        assert len(entries) == 2
+        assert_entries_are_balanced(entries)
+        assert_entries_have_single_target(entries)
+
+        debit = [e for e in entries if e.entry_type == LedgerEntryTypeEnum.DEBIT]
+        credit = [e for e in entries if e.entry_type == LedgerEntryTypeEnum.CREDIT]
+        assert len(debit) == 1
+        assert len(credit) == 1
+        assert debit[0].amount == credit[0].amount == Decimal("300.00")
+        assert debit[0].customer_account_id == acct_a1.id
+        assert debit[0].internal_account_id is None
+        assert debit[0].balance_after == Decimal("3500.00")
+        assert credit[0].internal_account_id == cash_account.id
+        assert credit[0].customer_account_id is None
+        assert credit[0].balance_after == Decimal("200.00")
 
     # --- 14. Withdrawal fails: insufficient funds ---
     client.cookies.clear()
@@ -403,8 +493,88 @@ async def test_transactions_scenarios(client: AsyncClient):
     resp = await client.get(f"/api/v1/customer/accounts/{acct_b1.id}")
     assert Decimal(resp.json()["available_balance"]) == Decimal("750.00")
 
-    # --- 20. Customer cannot access admin transaction endpoints ---
+    # --- 20. Staff can read internal settlement accounts ---
+    client.cookies.clear()
+    client.cookies.update(teller_cookie)
+    resp = await client.get("/api/v1/admin/internal-accounts")
+    assert resp.status_code == 200
+    internal_accounts = resp.json()
+    cash_usd = next(
+        account for account in internal_accounts if account["account_code"] == "CASH-USD"
+    )
+    cash_eur = next(
+        account for account in internal_accounts if account["account_code"] == "CASH-EUR"
+    )
+    assert Decimal(cash_usd["balance"]) == Decimal("250.00")
+    assert Decimal(cash_eur["balance"]) == Decimal("25.00")
+
+    resp = await client.get(f"/api/v1/admin/internal-accounts/{cash_usd['id']}")
+    assert resp.status_code == 200
+    assert resp.json()["account_code"] == "CASH-USD"
+
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        cash_stmt = select(InternalAccount).where(
+            InternalAccount.account_code == "CASH-USD"
+        )
+        cash_result = await db.execute(cash_stmt)
+        cash_accounts = list(cash_result.scalars().all())
+        assert len(cash_accounts) == 1
+        assert cash_accounts[0].balance == Decimal("250.00")
+
+    # --- 21. Customer cannot access admin transaction/internal-account endpoints ---
     client.cookies.clear()
     client.cookies.update(cust_a_cookie)
     resp = await client.get("/api/v1/admin/transactions")
     assert resp.status_code == 403
+    resp = await client.get("/api/v1/admin/internal-accounts")
+    assert resp.status_code == 403
+
+
+async def test_ledger_entry_validation_helpers():
+    base_entry = {
+        "transaction_id": uuid.uuid4(),
+        "entry_type": LedgerEntryTypeEnum.DEBIT,
+        "amount": Decimal("10.00"),
+        "currency": AccountCurrencyEnum.USD,
+        "balance_after": Decimal("10.00"),
+    }
+
+    with pytest.raises(HTTPException) as missing_target:
+        transaction_service._assert_single_ledger_target(LedgerEntry(**base_entry))
+    assert missing_target.value.status_code == 500
+    assert missing_target.value.detail == (
+        "Ledger entry must reference exactly one account target"
+    )
+
+    with pytest.raises(HTTPException) as duplicate_target:
+        transaction_service._assert_single_ledger_target(
+            LedgerEntry(
+                **base_entry,
+                customer_account_id=uuid.uuid4(),
+                internal_account_id=uuid.uuid4(),
+            )
+        )
+    assert duplicate_target.value.status_code == 500
+    assert duplicate_target.value.detail == (
+        "Ledger entry must reference exactly one account target"
+    )
+
+    with pytest.raises(HTTPException) as unbalanced_entries:
+        transaction_service._assert_ledger_entries_balanced(
+            [
+                LedgerEntry(
+                    **base_entry,
+                    customer_account_id=uuid.uuid4(),
+                ),
+                LedgerEntry(
+                    transaction_id=uuid.uuid4(),
+                    internal_account_id=uuid.uuid4(),
+                    entry_type=LedgerEntryTypeEnum.CREDIT,
+                    amount=Decimal("9.00"),
+                    currency=AccountCurrencyEnum.USD,
+                    balance_after=Decimal("9.00"),
+                ),
+            ]
+        )
+    assert unbalanced_entries.value.status_code == 500
+    assert unbalanced_entries.value.detail == "Ledger entries are not balanced"

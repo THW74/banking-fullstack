@@ -53,7 +53,8 @@ class TransactionReadSchema(BaseModel):
 class LedgerEntryReadSchema(BaseModel):
     id: uuid.UUID
     transaction_id: uuid.UUID
-    account_id: uuid.UUID
+    customer_account_id: uuid.UUID | None
+    internal_account_id: uuid.UUID | None
     entry_type: LedgerEntryTypeEnum
     amount: Decimal
     currency: AccountCurrencyEnum

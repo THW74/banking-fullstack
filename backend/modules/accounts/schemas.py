@@ -2,7 +2,12 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
-from .enums import AccountTypeEnum, AccountCurrencyEnum, AccountStatusEnum
+from .enums import (
+    AccountCurrencyEnum,
+    AccountStatusEnum,
+    AccountTypeEnum,
+    InternalAccountTypeEnum,
+)
 
 
 class BankAccountCreateSchema(BaseModel):
@@ -35,6 +40,20 @@ class BankAccountReadSchema(BaseModel):
     interest_rate: Decimal
     opened_at: datetime | None
     closed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InternalAccountReadSchema(BaseModel):
+    id: uuid.UUID
+    account_code: str
+    account_name: str
+    account_type: InternalAccountTypeEnum
+    currency: AccountCurrencyEnum
+    balance: Decimal
+    is_active: bool
     created_at: datetime
     updated_at: datetime
 

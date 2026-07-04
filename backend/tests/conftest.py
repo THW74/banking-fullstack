@@ -13,6 +13,7 @@ async def setup_db():
     async with engine.begin() as conn:
         await conn.execute(text("DROP TABLE IF EXISTS \"ledger_entries\" CASCADE;"))
         await conn.execute(text("DROP TABLE IF EXISTS \"transactions\" CASCADE;"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"internal_accounts\" CASCADE;"))
         await conn.execute(text("DROP TABLE IF EXISTS \"next_of_kin\" CASCADE;"))
         await conn.execute(text("DROP TABLE IF EXISTS \"bank_accounts\" CASCADE;"))
         await conn.execute(text("DROP TABLE IF EXISTS \"users\" CASCADE;"))
