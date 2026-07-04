@@ -16,10 +16,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    PROJECT_NAME: str
-    PROJECT_DESCRIPTION: str
-    API_V1_STR: str
-    SITE_NAME: str
+    PROJECT_NAME: str = "Banking API"
+    PROJECT_DESCRIPTION: str = "Banking backend API"
+    API_V1_STR: str = "/api/v1"
+    SITE_NAME: str = "Teknoll Bank"
 
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"

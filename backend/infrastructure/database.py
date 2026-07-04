@@ -4,6 +4,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from .config import settings
 # Import your models here to register them with SQLModel.metadata
 from modules.users.models import User
+from modules.customer_profiles.models import CustomerProfile
 from typing import Annotated, AsyncGenerator
 from fastapi import Depends
 

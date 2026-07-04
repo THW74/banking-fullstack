@@ -1,10 +1,13 @@
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 from sqlmodel import Field, SQLModel
 from .schemas import SecurityQuestionsSchema, AccountStatusSchema, RoleChoicesSchema
 
 
 class User(SQLModel, table=True):
+    __tablename__: Any = "users"
+
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     username: str | None = Field(default=None, unique=True, nullable=True, max_length=12)
     email: str = Field(unique=True, index=True, nullable=False, max_length=255)
