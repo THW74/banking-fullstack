@@ -9,6 +9,7 @@ from modules.users.routes import users_router, admin_router
 from modules.customer_profiles.routes import customer_profile_router, admin_kyc_router
 from modules.next_of_kin.routes import next_of_kin_router
 from modules.accounts.routes import customer_accounts_router, admin_accounts_router
+from modules.transactions.routes import customer_transactions_router, admin_transactions_router
 
 @asynccontextmanager
 async def life_span(app: FastAPI):
@@ -62,6 +63,16 @@ app.include_router(
     admin_accounts_router,
     prefix=settings.API_V1_STR + "/admin/accounts",
     tags=["admin-accounts"],
+)
+app.include_router(
+    customer_transactions_router,
+    prefix=settings.API_V1_STR + "/customer/transactions",
+    tags=["customer-transactions"],
+)
+app.include_router(
+    admin_transactions_router,
+    prefix=settings.API_V1_STR + "/admin/transactions",
+    tags=["admin-transactions"],
 )
 
 @app.get("/")
