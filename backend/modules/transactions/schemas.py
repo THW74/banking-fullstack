@@ -30,6 +30,10 @@ class AdminWithdrawalSchema(BaseModel):
     description: str | None = Field(default=None, max_length=255)
 
 
+class TransactionReversalSchema(BaseModel):
+    reason: str = Field(min_length=3, max_length=255)
+
+
 # --- Response schemas ---
 
 
@@ -44,6 +48,11 @@ class TransactionReadSchema(BaseModel):
     currency: AccountCurrencyEnum
     description: str | None
     created_by_user_id: uuid.UUID
+    reversed_transaction_id: uuid.UUID | None
+    reversed_by_transaction_id: uuid.UUID | None
+    reversal_reason: str | None
+    reversed_at: datetime | None
+    reversed_by_user_id: uuid.UUID | None
     posted_at: datetime | None
     created_at: datetime
 
