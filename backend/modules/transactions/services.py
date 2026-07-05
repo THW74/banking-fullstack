@@ -222,6 +222,35 @@ class TransactionService:
             db.add(entry)
         await db.commit()
         await db.refresh(transaction)
+
+        try:
+            from modules.notifications.services import notification_service
+            from modules.notifications.enums import NotificationTypeEnum
+            
+            # Notify sender
+            await notification_service.create_notification(
+                db,
+                user_id=source.user_id,
+                title="Transfer Sent",
+                message=f"You have sent {transaction.amount} {transaction.currency} to account {destination.account_number}.",
+                notification_type=NotificationTypeEnum.TRANSACTION,
+                source_metadata={"transaction_id": str(transaction.id)},
+            )
+            
+            # Notify receiver (if different customer)
+            if destination.user_id != source.user_id:
+                await notification_service.create_notification(
+                    db,
+                    user_id=destination.user_id,
+                    title="Transfer Received",
+                    message=f"You have received {transaction.amount} {transaction.currency} from account {source.account_number}.",
+                    notification_type=NotificationTypeEnum.TRANSACTION,
+                    source_metadata={"transaction_id": str(transaction.id)},
+                )
+        except Exception:
+            await db.rollback()
+
+        await db.refresh(transaction)
         return transaction
 
     async def admin_deposit(
@@ -304,6 +333,22 @@ class TransactionService:
         for entry in entries:
             db.add(entry)
         await db.commit()
+        await db.refresh(transaction)
+
+        try:
+            from modules.notifications.services import notification_service
+            from modules.notifications.enums import NotificationTypeEnum
+            await notification_service.create_notification(
+                db,
+                user_id=destination.user_id,
+                title="Deposit Posted",
+                message=f"A deposit of {transaction.amount} {transaction.currency} has been posted to your account.",
+                notification_type=NotificationTypeEnum.TRANSACTION,
+                source_metadata={"transaction_id": str(transaction.id)},
+            )
+        except Exception:
+            await db.rollback()
+
         await db.refresh(transaction)
         return transaction
 
@@ -477,6 +522,22 @@ class TransactionService:
             db.add(entry)
         await db.commit()
         await db.refresh(transaction)
+
+        try:
+            from modules.notifications.services import notification_service
+            from modules.notifications.enums import NotificationTypeEnum
+            await notification_service.create_notification(
+                db,
+                user_id=source.user_id,
+                title="Withdrawal Posted",
+                message=f"A withdrawal of {transaction.amount} {transaction.currency} has been posted from your account.",
+                notification_type=NotificationTypeEnum.TRANSACTION,
+                source_metadata={"transaction_id": str(transaction.id)},
+            )
+        except Exception:
+            await db.rollback()
+
+        await db.refresh(transaction)
         return transaction
 
     async def reverse_transaction(
@@ -581,6 +642,40 @@ class TransactionService:
             db.add(entry)
 
         await db.commit()
+        await db.refresh(reversal_transaction)
+
+        try:
+            from modules.notifications.services import notification_service
+            from modules.notifications.enums import NotificationTypeEnum
+            
+            src_acct = None
+            if original.source_account_id is not None:
+                from modules.accounts.services import bank_account_service
+                src_acct = await bank_account_service.get_account_by_id_for_admin(db, original.source_account_id)
+                await notification_service.create_notification(
+                    db,
+                    user_id=src_acct.user_id,
+                    title="Transaction Reversed",
+                    message=f"Transaction {original.reference} of amount {original.amount} {original.currency} has been reversed.",
+                    notification_type=NotificationTypeEnum.TRANSACTION,
+                    source_metadata={"transaction_id": str(reversal_transaction.id), "reversed_transaction_id": str(original.id)},
+                )
+            
+            if original.destination_account_id is not None:
+                from modules.accounts.services import bank_account_service
+                dest_acct = await bank_account_service.get_account_by_id_for_admin(db, original.destination_account_id)
+                if src_acct is None or dest_acct.user_id != src_acct.user_id:
+                    await notification_service.create_notification(
+                        db,
+                        user_id=dest_acct.user_id,
+                        title="Transaction Reversed",
+                        message=f"Transaction {original.reference} of amount {original.amount} {original.currency} has been reversed.",
+                        notification_type=NotificationTypeEnum.TRANSACTION,
+                        source_metadata={"transaction_id": str(reversal_transaction.id), "reversed_transaction_id": str(original.id)},
+                    )
+        except Exception:
+            await db.rollback()
+
         await db.refresh(reversal_transaction)
         return reversal_transaction
 
