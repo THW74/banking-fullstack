@@ -1,19 +1,28 @@
 import uuid
 import random
 import calendar
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, time, timedelta
 from decimal import Decimal
 from fastapi import HTTPException, status
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, case
 
 from modules.customer_profiles.models import CustomerProfile
 from modules.customer_profiles.enums import KycStatusEnum
 from modules.products.models import AccountProduct
 from modules.products.services import product_service
+from modules.daily_balance_snapshots.models import DailyBalanceSnapshot
+from modules.transactions.models import LedgerEntry, Transaction
+from modules.transactions.enums import LedgerEntryTypeEnum
 from .models import BankAccount, InternalAccount
 from .enums import AccountCurrencyEnum, AccountStatusEnum, AccountTypeEnum, InternalAccountTypeEnum
-from .schemas import BankAccountCreateSchema, BankAccountUpdateSchema
+from .schemas import (
+    BankAccountCreateSchema,
+    BankAccountUpdateSchema,
+    AccountStatementSchema,
+    AccountStatementLineSchema,
+)
 
 
 class BankAccountService:
@@ -202,6 +211,186 @@ class BankAccountService:
         month = month_index % 12 + 1
         day = min(opened_on.day, calendar.monthrange(year, month)[1])
         return date(year, month, day)
+
+    async def get_account_statement(
+        self,
+        db: AsyncSession,
+        account_id: uuid.UUID,
+        from_date: date,
+        to_date: date,
+        limit: int,
+        offset: int,
+        user_id: uuid.UUID | None = None,
+    ) -> AccountStatementSchema:
+        # 1. Fetch bank account and verify permissions / ownership
+        if user_id is not None:
+            # Customer access
+            account = await self.get_customer_account(db, account_id, user_id)
+        else:
+            # Admin access
+            account = await self.get_account_by_id_for_admin(db, account_id)
+
+        # 2. Get snapshots for from_date and to_date
+        from_stmt = select(DailyBalanceSnapshot).where(
+            DailyBalanceSnapshot.account_id == account_id,
+            DailyBalanceSnapshot.business_date == from_date,
+            DailyBalanceSnapshot.currency == account.currency,
+        )
+        from_res = await db.execute(from_stmt)
+        from_snapshot = from_res.scalar_one_or_none()
+
+        to_stmt = select(DailyBalanceSnapshot).where(
+            DailyBalanceSnapshot.account_id == account_id,
+            DailyBalanceSnapshot.business_date == to_date,
+            DailyBalanceSnapshot.currency == account.currency,
+        )
+        to_res = await db.execute(to_stmt)
+        to_snapshot = to_res.scalar_one_or_none()
+
+        if from_snapshot is None or to_snapshot is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Daily balance snapshot is required for statement period"
+            )
+
+        opening_balance = from_snapshot.opening_balance
+        closing_balance = to_snapshot.closing_balance
+
+        # 3. Calculate date windows (inclusive)
+        start_at = datetime.combine(from_date, time.min)
+        end_at = datetime.combine(to_date + timedelta(days=1), time.min)
+
+        accounting_date = func.coalesce(Transaction.posted_at, LedgerEntry.created_at)
+
+        # 3b. Pre-check for any corrupted targets in this period (O(1) limit 1 check)
+        corruption_stmt = (
+            select(LedgerEntry.id)
+            .join(Transaction, col(LedgerEntry.transaction_id) == col(Transaction.id))
+            .where(col(LedgerEntry.customer_account_id) == account_id)
+            .where(col(LedgerEntry.currency) == account.currency)
+            .where(col(LedgerEntry.internal_account_id).is_not(None))
+            .where(accounting_date >= start_at)
+            .where(accounting_date < end_at)
+            .limit(1)
+        )
+        corruption_res = await db.execute(corruption_stmt)
+        if corruption_res.first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ledger entry must reference exactly one account target",
+            )
+
+        # 4. Sum debits, credits, unique transactions, and lines for complete-period totals
+        sum_debit = func.coalesce(
+            func.sum(case((col(LedgerEntry.entry_type) == LedgerEntryTypeEnum.DEBIT, col(LedgerEntry.amount)), else_=Decimal("0.00"))),
+            Decimal("0.00")
+        )
+        sum_credit = func.coalesce(
+            func.sum(case((col(LedgerEntry.entry_type) == LedgerEntryTypeEnum.CREDIT, col(LedgerEntry.amount)), else_=Decimal("0.00"))),
+            Decimal("0.00")
+        )
+        count_txn = func.count(col(LedgerEntry.transaction_id).distinct())
+        count_line = func.count(col(LedgerEntry.id))
+
+        summary_stmt = (
+            select(sum_debit, sum_credit, count_txn, count_line)
+            .join(Transaction, col(LedgerEntry.transaction_id) == col(Transaction.id))
+            .where(col(LedgerEntry.customer_account_id) == account_id)
+            .where(col(LedgerEntry.currency) == account.currency)
+            .where(accounting_date >= start_at)
+            .where(accounting_date < end_at)
+        )
+        summary_res = await db.execute(summary_stmt)
+        row = summary_res.first()
+        if row is not None:
+            total_debit, total_credit, transaction_count, line_count = row
+        else:
+            total_debit = Decimal("0.00")
+            total_credit = Decimal("0.00")
+            transaction_count = 0
+            line_count = 0
+
+        # 5. Fetch activity lines paginated (query limit + 1 to check has_more)
+        lines_stmt = (
+            select(LedgerEntry, Transaction)
+            .join(Transaction, col(LedgerEntry.transaction_id) == col(Transaction.id))
+            .where(col(LedgerEntry.customer_account_id) == account_id)
+            .where(col(LedgerEntry.currency) == account.currency)
+            .where(accounting_date >= start_at)
+            .where(accounting_date < end_at)
+            .order_by(
+                accounting_date.asc(),
+                col(LedgerEntry.created_at).asc(),
+                col(LedgerEntry.id).asc(),
+            )
+            .offset(offset)
+            .limit(limit + 1)
+        )
+        lines_res = await db.execute(lines_stmt)
+        all_lines = lines_res.all()
+
+        has_more = len(all_lines) > limit
+        paginated_lines = all_lines[:limit]
+
+        lines_list: list[AccountStatementLineSchema] = []
+        for entry, txn in paginated_lines:
+            # Validate corrupted ledger entry target
+            self._validate_statement_ledger_target(entry, account_id)
+
+            debit_amount = entry.amount if entry.entry_type == LedgerEntryTypeEnum.DEBIT else Decimal("0.00")
+            credit_amount = entry.amount if entry.entry_type == LedgerEntryTypeEnum.CREDIT else Decimal("0.00")
+            signed_amount = -entry.amount if entry.entry_type == LedgerEntryTypeEnum.DEBIT else entry.amount
+
+            lines_list.append(
+                AccountStatementLineSchema(
+                    ledger_entry_id=entry.id,
+                    transaction_id=entry.transaction_id,
+                    transaction_reference=txn.reference,
+                    transaction_type=txn.transaction_type.value,
+                    transaction_status=txn.status.value,
+                    accounting_date=txn.posted_at if txn.posted_at is not None else entry.created_at,
+                    posted_at=txn.posted_at,
+                    entry_type=entry.entry_type.value,
+                    debit_amount=debit_amount,
+                    credit_amount=credit_amount,
+                    signed_amount=signed_amount,
+                    balance_after=entry.balance_after,
+                    description=txn.description,
+                    created_by_user_id=txn.created_by_user_id,
+                )
+            )
+
+        return AccountStatementSchema(
+            account_id=account.id,
+            account_number=account.account_number,
+            account_name=account.account_name,
+            account_type=account.account_type,
+            currency=account.currency,
+            from_date=from_date,
+            to_date=to_date,
+            generated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            opening_balance=opening_balance,
+            closing_balance=closing_balance,
+            total_debit=total_debit,
+            total_credit=total_credit,
+            transaction_count=transaction_count,
+            line_count=line_count,
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
+            lines=lines_list,
+        )
+
+    def _validate_statement_ledger_target(
+        self,
+        entry: LedgerEntry,
+        account_id: uuid.UUID,
+    ) -> None:
+        if entry.customer_account_id != account_id or entry.internal_account_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ledger entry must reference exactly one account target",
+            )
 
 
 bank_account_service = BankAccountService()

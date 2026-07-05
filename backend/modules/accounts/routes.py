@@ -1,5 +1,6 @@
 import uuid
-from fastapi import APIRouter, Depends, status, Query
+from datetime import date
+from fastapi import APIRouter, Depends, status, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from typing import Annotated
@@ -12,6 +13,7 @@ from .schemas import (
     BankAccountReadSchema,
     BankAccountUpdateSchema,
     InternalAccountReadSchema,
+    AccountStatementSchema,
 )
 from .services import bank_account_service, internal_account_service
 from .enums import AccountStatusEnum
@@ -48,6 +50,30 @@ async def get_customer_account(
     return await bank_account_service.get_customer_account(db, account_id, current_user.user_id)
 
 
+@customer_accounts_router.get(
+    "/{account_id}/statement",
+    response_model=AccountStatementSchema,
+    summary="Get customer bank account statement"
+)
+async def get_customer_account_statement(
+    account_id: uuid.UUID,
+    current_user: ActiveCurrentUserDep,
+    from_date: date = Query(...),
+    to_date: date = Query(...),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_session)
+):
+    if from_date > to_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="from_date must be before or equal to to_date"
+        )
+    return await bank_account_service.get_account_statement(
+        db, account_id, from_date, to_date, limit, offset, user_id=current_user.user_id
+    )
+
+
 # --- ADMIN / STAFF ENDPOINTS ---
 
 @admin_accounts_router.get(
@@ -76,6 +102,30 @@ async def get_account_for_admin(
     db: AsyncSession = Depends(get_session)
 ):
     return await bank_account_service.get_account_by_id_for_admin(db, account_id)
+
+
+@admin_accounts_router.get(
+    "/{account_id}/statement",
+    response_model=AccountStatementSchema,
+    summary="Get bank account statement (Staff/Admin)"
+)
+async def get_admin_account_statement(
+    account_id: uuid.UUID,
+    current_user: Annotated[CurrentUser, Depends(require_user_permission(UserPermission.READ_BANK_ACCOUNTS))],
+    from_date: date = Query(...),
+    to_date: date = Query(...),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_session)
+):
+    if from_date > to_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="from_date must be before or equal to to_date"
+        )
+    return await bank_account_service.get_account_statement(
+        db, account_id, from_date, to_date, limit, offset, user_id=None
+    )
 
 
 @admin_accounts_router.post(
