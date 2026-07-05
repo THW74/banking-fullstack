@@ -15,6 +15,7 @@ from modules.accounts.routes import (
 )
 from modules.products.routes import admin_products_router, customer_products_router
 from modules.reports.routes import admin_reports_router
+from modules.batches.routes import admin_batches_router
 from modules.transactions.routes import customer_transactions_router, admin_transactions_router
 
 @asynccontextmanager
@@ -89,6 +90,11 @@ app.include_router(
     admin_reports_router,
     prefix=settings.API_V1_STR + "/admin/reports",
     tags=["admin-reports"],
+)
+app.include_router(
+    admin_batches_router,
+    prefix=settings.API_V1_STR + "/admin/batches",
+    tags=["admin-batches"],
 )
 app.include_router(
     customer_transactions_router,

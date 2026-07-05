@@ -1,0 +1,56 @@
+import uuid
+from datetime import date, datetime
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict
+
+from modules.accounts.enums import AccountCurrencyEnum
+from .enums import EndOfDayBatchStatusEnum, EndOfDayValidationIssueTypeEnum
+
+
+class EndOfDayBatchRunSchema(BaseModel):
+    business_date: date
+
+
+class EndOfDayBatchCurrencySummaryReadSchema(BaseModel):
+    id: uuid.UUID
+    batch_id: uuid.UUID
+    currency: AccountCurrencyEnum
+    transaction_count: int
+    ledger_entry_count: int
+    total_debit: Decimal
+    total_credit: Decimal
+    is_balanced: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EndOfDayBatchValidationIssueReadSchema(BaseModel):
+    id: uuid.UUID
+    batch_id: uuid.UUID
+    issue_type: EndOfDayValidationIssueTypeEnum
+    message: str
+    transaction_id: uuid.UUID | None
+    ledger_entry_id: uuid.UUID | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EndOfDayBatchReadSchema(BaseModel):
+    id: uuid.UUID
+    business_date: date
+    status: EndOfDayBatchStatusEnum
+    started_at: datetime
+    completed_at: datetime | None
+    requested_by_user_id: uuid.UUID
+    transaction_count: int
+    ledger_entry_count: int
+    currency_count: int
+    validation_issue_count: int
+    is_balanced: bool
+    failure_reason: str | None
+    summaries: list[EndOfDayBatchCurrencySummaryReadSchema] = []
+    validation_issues: list[EndOfDayBatchValidationIssueReadSchema] = []
+
+    model_config = ConfigDict(from_attributes=True)
