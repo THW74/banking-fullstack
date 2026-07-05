@@ -248,7 +248,7 @@ class TransactionService:
                     source_metadata={"transaction_id": str(transaction.id)},
                 )
         except Exception:
-            pass
+            await db.rollback()
 
         await db.refresh(transaction)
         return transaction
@@ -347,7 +347,7 @@ class TransactionService:
                 source_metadata={"transaction_id": str(transaction.id)},
             )
         except Exception:
-            pass
+            await db.rollback()
 
         await db.refresh(transaction)
         return transaction
@@ -535,7 +535,7 @@ class TransactionService:
                 source_metadata={"transaction_id": str(transaction.id)},
             )
         except Exception:
-            pass
+            await db.rollback()
 
         await db.refresh(transaction)
         return transaction
@@ -674,7 +674,7 @@ class TransactionService:
                         source_metadata={"transaction_id": str(reversal_transaction.id), "reversed_transaction_id": str(original.id)},
                     )
         except Exception:
-            pass
+            await db.rollback()
 
         await db.refresh(reversal_transaction)
         return reversal_transaction

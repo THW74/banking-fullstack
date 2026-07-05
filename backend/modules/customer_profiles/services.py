@@ -155,7 +155,7 @@ class CustomerProfileService:
                 source_metadata={"profile_id": str(profile.id)},
             )
         except Exception:
-            pass
+            await db.rollback()
 
         await db.refresh(profile)
         return profile
@@ -229,7 +229,7 @@ class CustomerProfileService:
                 source_metadata={"profile_id": str(profile.id)},
             )
         except Exception:
-            pass
+            await db.rollback()
 
         await db.refresh(profile)
         return profile
@@ -272,7 +272,7 @@ class CustomerProfileService:
                 source_metadata={"profile_id": str(profile.id), "rejection_reason": profile.rejection_reason},
             )
         except Exception:
-            pass
+            await db.rollback()
 
         await db.refresh(profile)
         return profile

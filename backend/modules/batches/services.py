@@ -369,7 +369,7 @@ class EndOfDayBatchService:
                 source_metadata={"batch_id": str(batch.id), "business_date": batch.business_date.isoformat(), "is_balanced": batch.is_balanced},
             )
         except Exception:
-            pass
+            await db.rollback()
 
         await db.refresh(batch)
 
