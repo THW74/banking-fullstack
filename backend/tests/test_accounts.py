@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 import pytest
 from httpx import AsyncClient
 from sqlmodel import select
@@ -51,6 +52,39 @@ async def login_and_get_cookie(client: AsyncClient, email: str) -> dict:
     token = resp.cookies.get("access_token")
     client.cookies.clear()
     return {"access_token": token}
+
+
+async def create_active_product(
+    client: AsyncClient,
+    cookie: dict,
+    code: str,
+    name: str,
+    account_type: AccountTypeEnum,
+    currency: AccountCurrencyEnum,
+    interest_rate: str = "1.25",
+    minimum_balance: str = "25.00",
+    monthly_fee: str = "2.50",
+) -> dict:
+    client.cookies.clear()
+    client.cookies.update(cookie)
+    resp = await client.post(
+        "/api/v1/admin/products",
+        json={
+            "code": code,
+            "name": name,
+            "account_type": account_type.value,
+            "currency": currency.value,
+            "interest_rate": interest_rate,
+            "minimum_balance": minimum_balance,
+            "monthly_fee": monthly_fee,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    product = resp.json()
+
+    resp = await client.post(f"/api/v1/admin/products/{product['id']}/activate")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
 
 
 from datetime import date, timezone
@@ -106,13 +140,36 @@ async def test_accounts_scenarios(client: AsyncClient):
     bm_cookie = await login_and_get_cookie(client, bm.email)
     admin_cookie = await login_and_get_cookie(client, admin.email)
 
+    unique = uuid.uuid4().hex[:8].upper()
+    savings_product = await create_active_product(
+        client,
+        admin_cookie,
+        f"SAV{unique}",
+        "Savings Product",
+        AccountTypeEnum.SAVINGS,
+        AccountCurrencyEnum.USD,
+        interest_rate="1.75",
+        minimum_balance="50.00",
+        monthly_fee="1.25",
+    )
+    checking_product = await create_active_product(
+        client,
+        admin_cookie,
+        f"CHK{unique}",
+        "Checking Product",
+        AccountTypeEnum.CHECKING,
+        AccountCurrencyEnum.USD,
+        interest_rate="0.25",
+        minimum_balance="10.00",
+        monthly_fee="3.00",
+    )
+
     # --- 1. Attempt to create bank account for Customer A before KYC approved (fails 400) ---
     client.cookies.clear()
     client.cookies.update(admin_cookie)
     payload_a1 = {
         "user_id": str(customer_a.id),
-        "account_type": AccountTypeEnum.SAVINGS.value,
-        "currency": AccountCurrencyEnum.USD.value,
+        "product_id": savings_product["id"],
         "account_name": "Customer A Savings",
         "is_primary": True,
     }
@@ -131,12 +188,20 @@ async def test_accounts_scenarios(client: AsyncClient):
     assert acc_a1["account_status"] == AccountStatusEnum.ACTIVE.value
     assert acc_a1["is_primary"] is True
     assert len(acc_a1["account_number"]) == 10
+    assert acc_a1["product_id"] == savings_product["id"]
+    assert acc_a1["account_type"] == AccountTypeEnum.SAVINGS.value
+    assert acc_a1["currency"] == AccountCurrencyEnum.USD.value
+    assert Decimal(acc_a1["interest_rate"]) == Decimal("1.75")
+    assert Decimal(acc_a1["minimum_balance"]) == Decimal("50.00")
+    assert Decimal(acc_a1["monthly_fee"]) == Decimal("1.25")
+    assert acc_a1["fixed_deposit_term_months"] is None
+    assert acc_a1["fixed_deposit_maturity_date"] is None
+    assert acc_a1["early_withdrawal_penalty_rate"] is None
 
     # --- 3. Create a second account (checking) for Customer A, setting as primary ---
     payload_a2 = {
         "user_id": str(customer_a.id),
-        "account_type": AccountTypeEnum.CHECKING.value,
-        "currency": AccountCurrencyEnum.USD.value,
+        "product_id": checking_product["id"],
         "account_name": "Customer A Checking",
         "is_primary": True,
     }

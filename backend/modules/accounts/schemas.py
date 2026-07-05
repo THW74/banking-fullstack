@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 from .enums import (
@@ -12,11 +12,9 @@ from .enums import (
 
 class BankAccountCreateSchema(BaseModel):
     user_id: uuid.UUID
-    account_type: AccountTypeEnum
-    currency: AccountCurrencyEnum
+    product_id: uuid.UUID
     account_name: str = Field(..., min_length=2, max_length=100)
     is_primary: bool = False
-    interest_rate: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0.00"))
 
 
 class BankAccountUpdateSchema(BaseModel):
@@ -29,6 +27,7 @@ class BankAccountUpdateSchema(BaseModel):
 class BankAccountReadSchema(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID
+    product_id: uuid.UUID | None
     account_number: str
     account_name: str
     account_type: AccountTypeEnum
@@ -38,6 +37,11 @@ class BankAccountReadSchema(BaseModel):
     current_balance: Decimal
     is_primary: bool
     interest_rate: Decimal
+    minimum_balance: Decimal
+    monthly_fee: Decimal
+    fixed_deposit_term_months: int | None
+    fixed_deposit_maturity_date: date | None
+    early_withdrawal_penalty_rate: Decimal | None
     opened_at: datetime | None
     closed_at: datetime | None
     created_at: datetime

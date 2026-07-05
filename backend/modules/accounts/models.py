@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from sqlmodel import Field, SQLModel
@@ -16,6 +16,9 @@ class BankAccount(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True, nullable=False)
+    product_id: uuid.UUID | None = Field(
+        default=None, foreign_key="account_products.id", index=True
+    )
 
     account_number: str = Field(unique=True, index=True, nullable=False, max_length=32)
     account_name: str = Field(max_length=100, nullable=False)
@@ -29,6 +32,13 @@ class BankAccount(SQLModel, table=True):
 
     is_primary: bool = Field(default=False)
     interest_rate: Decimal = Field(default=Decimal("0.00"), max_digits=5, decimal_places=2)
+    minimum_balance: Decimal = Field(default=Decimal("0.00"), max_digits=18, decimal_places=2)
+    monthly_fee: Decimal = Field(default=Decimal("0.00"), max_digits=18, decimal_places=2)
+    fixed_deposit_term_months: int | None = None
+    fixed_deposit_maturity_date: date | None = None
+    early_withdrawal_penalty_rate: Decimal | None = Field(
+        default=None, max_digits=5, decimal_places=2
+    )
 
     opened_at: datetime | None = None
     closed_at: datetime | None = None

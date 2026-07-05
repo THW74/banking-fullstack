@@ -1,6 +1,7 @@
 import uuid
 import random
-from datetime import datetime, timezone
+import calendar
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from fastapi import HTTPException, status
 from sqlmodel import select
@@ -8,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.customer_profiles.models import CustomerProfile
 from modules.customer_profiles.enums import KycStatusEnum
+from modules.products.models import AccountProduct
+from modules.products.services import product_service
 from .models import BankAccount, InternalAccount
-from .enums import AccountCurrencyEnum, AccountStatusEnum, InternalAccountTypeEnum
+from .enums import AccountCurrencyEnum, AccountStatusEnum, AccountTypeEnum, InternalAccountTypeEnum
 from .schemas import BankAccountCreateSchema, BankAccountUpdateSchema
 
 
@@ -68,17 +71,29 @@ class BankAccountService:
 
         # Generate unique 10-digit account number string
         account_number = await self._generate_unique_account_number(db)
+        product = await product_service.get_active_product_for_account_opening(
+            db, schema.product_id
+        )
+        opened_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         account = BankAccount(
             user_id=schema.user_id,
+            product_id=product.id,
             account_number=account_number,
             account_name=schema.account_name,
-            account_type=schema.account_type,
-            currency=schema.currency,
+            account_type=product.account_type,
+            currency=product.currency,
             account_status=AccountStatusEnum.ACTIVE,  # Default to ACTIVE when created by admin
-            opened_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            opened_at=opened_at,
             is_primary=schema.is_primary,
-            interest_rate=schema.interest_rate,
+            interest_rate=product.interest_rate,
+            minimum_balance=product.minimum_balance,
+            monthly_fee=product.monthly_fee,
+            fixed_deposit_term_months=product.fixed_deposit_term_months,
+            fixed_deposit_maturity_date=self._calculate_fixed_deposit_maturity_date(
+                product, opened_at.date()
+            ),
+            early_withdrawal_penalty_rate=product.early_withdrawal_penalty_rate,
         )
 
         db.add(account)
@@ -169,6 +184,24 @@ class BankAccountService:
             if not res.scalar_one_or_none():
                 return num
         raise RuntimeError("Failed to generate unique account number")
+
+    def _calculate_fixed_deposit_maturity_date(
+        self, product: AccountProduct, opened_on: date
+    ) -> date | None:
+        if product.account_type != AccountTypeEnum.FIXED_DEPOSIT:
+            return None
+
+        if product.fixed_deposit_term_months is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Fixed deposit product is missing fixed_deposit_term_months",
+            )
+
+        month_index = opened_on.month - 1 + product.fixed_deposit_term_months
+        year = opened_on.year + month_index // 12
+        month = month_index % 12 + 1
+        day = min(opened_on.day, calendar.monthrange(year, month)[1])
+        return date(year, month, day)
 
 
 bank_account_service = BankAccountService()
