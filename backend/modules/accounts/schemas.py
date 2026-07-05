@@ -62,3 +62,46 @@ class InternalAccountReadSchema(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AccountStatementLineSchema(BaseModel):
+    ledger_entry_id: uuid.UUID
+    transaction_id: uuid.UUID
+    transaction_reference: str
+    transaction_type: str
+    transaction_status: str
+    accounting_date: datetime
+    posted_at: datetime | None
+    entry_type: str
+    debit_amount: Decimal
+    credit_amount: Decimal
+    signed_amount: Decimal
+    balance_after: Decimal
+    description: str | None
+    created_by_user_id: uuid.UUID
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AccountStatementSchema(BaseModel):
+    account_id: uuid.UUID
+    account_number: str
+    account_name: str
+    account_type: AccountTypeEnum
+    currency: AccountCurrencyEnum
+    from_date: date
+    to_date: date
+    generated_at: datetime
+    opening_balance: Decimal
+    closing_balance: Decimal
+    total_debit: Decimal
+    total_credit: Decimal
+    transaction_count: int
+    line_count: int
+    limit: int
+    offset: int
+    has_more: bool
+    lines: list[AccountStatementLineSchema]
+
+    model_config = ConfigDict(from_attributes=True)
+
