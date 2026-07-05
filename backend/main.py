@@ -13,6 +13,7 @@ from modules.accounts.routes import (
     admin_internal_accounts_router,
     customer_accounts_router,
 )
+from modules.products.routes import admin_products_router, customer_products_router
 from modules.transactions.routes import customer_transactions_router, admin_transactions_router
 
 @asynccontextmanager
@@ -72,6 +73,16 @@ app.include_router(
     admin_internal_accounts_router,
     prefix=settings.API_V1_STR + "/admin/internal-accounts",
     tags=["admin-internal-accounts"],
+)
+app.include_router(
+    customer_products_router,
+    prefix=settings.API_V1_STR + "/customer/products",
+    tags=["customer-products"],
+)
+app.include_router(
+    admin_products_router,
+    prefix=settings.API_V1_STR + "/admin/products",
+    tags=["admin-products"],
 )
 app.include_router(
     customer_transactions_router,
