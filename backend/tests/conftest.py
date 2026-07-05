@@ -11,6 +11,9 @@ async def setup_db():
     from sqlalchemy import text
     from infrastructure.database import engine
     async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE IF EXISTS \"end_of_day_batch_validation_issues\" CASCADE;"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"end_of_day_batch_currency_summaries\" CASCADE;"))
+        await conn.execute(text("DROP TABLE IF EXISTS \"end_of_day_batches\" CASCADE;"))
         await conn.execute(text("DROP TABLE IF EXISTS \"ledger_entries\" CASCADE;"))
         await conn.execute(text("DROP TABLE IF EXISTS \"transactions\" CASCADE;"))
         await conn.execute(text("DROP TABLE IF EXISTS \"internal_accounts\" CASCADE;"))

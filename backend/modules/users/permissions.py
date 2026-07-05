@@ -25,6 +25,8 @@ class UserPermission(StrEnum):
     POST_BANK_TRANSACTIONS = "POST_BANK_TRANSACTIONS"
     REVERSE_BANK_TRANSACTIONS = "REVERSE_BANK_TRANSACTIONS"
     READ_FINANCIAL_REPORTS = "READ_FINANCIAL_REPORTS"
+    READ_END_OF_DAY_BATCHES = "READ_END_OF_DAY_BATCHES"
+    RUN_END_OF_DAY_BATCHES = "RUN_END_OF_DAY_BATCHES"
 
 
 ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
@@ -64,6 +66,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.POST_BANK_TRANSACTIONS,
         UserPermission.REVERSE_BANK_TRANSACTIONS,
         UserPermission.READ_FINANCIAL_REPORTS,
+        UserPermission.READ_END_OF_DAY_BATCHES,
     },
     
     RoleChoicesSchema.ADMIN: {
@@ -87,6 +90,8 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.POST_BANK_TRANSACTIONS,
         UserPermission.REVERSE_BANK_TRANSACTIONS,
         UserPermission.READ_FINANCIAL_REPORTS,
+        UserPermission.READ_END_OF_DAY_BATCHES,
+        UserPermission.RUN_END_OF_DAY_BATCHES,
     },
     
     RoleChoicesSchema.SUPER_ADMIN: {
@@ -112,6 +117,8 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.POST_BANK_TRANSACTIONS,
         UserPermission.REVERSE_BANK_TRANSACTIONS,
         UserPermission.READ_FINANCIAL_REPORTS,
+        UserPermission.READ_END_OF_DAY_BATCHES,
+        UserPermission.RUN_END_OF_DAY_BATCHES,
     },
 }
 
