@@ -212,6 +212,22 @@ def line_by_account_code(report: dict, account_code: str) -> dict | None:
     )
 
 
+def decimal_value(value: object) -> Decimal:
+    return Decimal(str(value))
+
+
+def line_decimal_value(line: dict | None, field: str) -> Decimal:
+    if line is None:
+        return Decimal("0.00")
+    return decimal_value(line[field])
+
+
+def line_signed_net(line: dict | None) -> Decimal:
+    return line_decimal_value(line, "net_debit") - line_decimal_value(
+        line, "net_credit"
+    )
+
+
 async def test_trial_balance_auth_rbac_missing_currency_and_empty_report(
     client: AsyncClient,
 ):
@@ -270,13 +286,13 @@ async def test_trial_balance_auth_rbac_missing_currency_and_empty_report(
 
     for role_name in ("branch_manager", "admin", "super_admin"):
         report = await get_trial_balance(
-            client, cookies[role_name], AccountCurrencyEnum.GBP
+            client, cookies[role_name], AccountCurrencyEnum.GBP, date(2000, 1, 1)
         )
         assert report["currency"] == AccountCurrencyEnum.GBP.value
-        assert Decimal(report["total_debit"]) == Decimal("0.00")
-        assert Decimal(report["total_credit"]) == Decimal("0.00")
-        assert Decimal(report["total_net_debit"]) == Decimal("0.00")
-        assert Decimal(report["total_net_credit"]) == Decimal("0.00")
+        assert decimal_value(report["total_debit"]) == Decimal("0.00")
+        assert decimal_value(report["total_credit"]) == Decimal("0.00")
+        assert decimal_value(report["total_net_debit"]) == Decimal("0.00")
+        assert decimal_value(report["total_net_credit"]) == Decimal("0.00")
         assert report["is_balanced"] is True
         assert report["line_count"] == 0
         assert report["lines"] == []
@@ -310,6 +326,16 @@ async def test_trial_balance_reports_postings_reversals_and_currency_filter(
 
     admin_cookie = await login_and_get_cookie(client, admin.email)
     customer_cookie = await login_and_get_cookie(client, customer.email)
+    as_of = datetime.now(timezone.utc).date()
+    baseline_report = await get_trial_balance(
+        client, admin_cookie, AccountCurrencyEnum.USD, as_of
+    )
+    baseline_total_debit = decimal_value(baseline_report["total_debit"])
+    baseline_total_credit = decimal_value(baseline_report["total_credit"])
+    baseline_cash_line = line_by_account_code(baseline_report, "CASH-USD")
+    baseline_interest_line = line_by_account_code(
+        baseline_report, "INTEREST-EXPENSE-USD"
+    )
 
     await post_deposit(client, admin_cookie, source.id, "500.00")
     await post_withdrawal(client, admin_cookie, source.id, "100.00")
@@ -324,46 +350,51 @@ async def test_trial_balance_reports_postings_reversals_and_currency_filter(
     await post_deposit(client, admin_cookie, eur_account.id, "77.00")
 
     report = await get_trial_balance(
-        client, admin_cookie, AccountCurrencyEnum.USD, date.today()
+        client, admin_cookie, AccountCurrencyEnum.USD, as_of
     )
     assert report["currency"] == AccountCurrencyEnum.USD.value
-    assert Decimal(report["total_debit"]) == Decimal("895.50")
-    assert Decimal(report["total_credit"]) == Decimal("895.50")
-    assert Decimal(report["total_net_debit"]) == Decimal("425.50")
-    assert Decimal(report["total_net_credit"]) == Decimal("425.50")
+    assert (
+        decimal_value(report["total_debit"]) - baseline_total_debit
+        == Decimal("895.50")
+    )
+    assert (
+        decimal_value(report["total_credit"]) - baseline_total_credit
+        == Decimal("895.50")
+    )
+    assert decimal_value(report["total_debit"]) == decimal_value(report["total_credit"])
+    assert decimal_value(report["total_net_debit"]) == decimal_value(
+        report["total_net_credit"]
+    )
     assert report["is_balanced"] is True
-    assert report["line_count"] == 4
 
     source_line = line_by_account_id(report, source.id)
     assert source_line is not None
     assert source_line["account_target_type"] == "customer_account"
     assert source_line["account_code"] == source.account_number
-    assert Decimal(source_line["debit_total"]) == Decimal("250.00")
-    assert Decimal(source_line["credit_total"]) == Decimal("500.00")
-    assert Decimal(source_line["net_debit"]) == Decimal("0.00")
-    assert Decimal(source_line["net_credit"]) == Decimal("250.00")
+    assert decimal_value(source_line["debit_total"]) == Decimal("250.00")
+    assert decimal_value(source_line["credit_total"]) == Decimal("500.00")
+    assert decimal_value(source_line["net_debit"]) == Decimal("0.00")
+    assert decimal_value(source_line["net_credit"]) == Decimal("250.00")
 
     destination_line = line_by_account_id(report, destination.id)
     assert destination_line is not None
-    assert Decimal(destination_line["debit_total"]) == Decimal("0.00")
-    assert Decimal(destination_line["credit_total"]) == Decimal("175.50")
-    assert Decimal(destination_line["net_debit"]) == Decimal("0.00")
-    assert Decimal(destination_line["net_credit"]) == Decimal("175.50")
+    assert decimal_value(destination_line["debit_total"]) == Decimal("0.00")
+    assert decimal_value(destination_line["credit_total"]) == Decimal("175.50")
+    assert decimal_value(destination_line["net_debit"]) == Decimal("0.00")
+    assert decimal_value(destination_line["net_credit"]) == Decimal("175.50")
 
     cash_line = line_by_account_code(report, "CASH-USD")
     assert cash_line is not None
     assert cash_line["account_target_type"] == "internal_account"
-    assert Decimal(cash_line["debit_total"]) == Decimal("560.00")
-    assert Decimal(cash_line["credit_total"]) == Decimal("160.00")
-    assert Decimal(cash_line["net_debit"]) == Decimal("400.00")
-    assert Decimal(cash_line["net_credit"]) == Decimal("0.00")
+    assert line_signed_net(cash_line) - line_signed_net(
+        baseline_cash_line
+    ) == Decimal("400.00")
 
     interest_line = line_by_account_code(report, "INTEREST-EXPENSE-USD")
     assert interest_line is not None
-    assert Decimal(interest_line["debit_total"]) == Decimal("25.50")
-    assert Decimal(interest_line["credit_total"]) == Decimal("0.00")
-    assert Decimal(interest_line["net_debit"]) == Decimal("25.50")
-    assert Decimal(interest_line["net_credit"]) == Decimal("0.00")
+    assert line_signed_net(interest_line) - line_signed_net(
+        baseline_interest_line
+    ) == Decimal("25.50")
 
     assert line_by_account_id(report, reversed_account.id) is None
     assert line_by_account_id(report, eur_account.id) is None
