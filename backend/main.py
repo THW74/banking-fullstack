@@ -15,6 +15,7 @@ from modules.accounts.routes import (
 )
 from modules.products.routes import admin_products_router, customer_products_router
 from modules.reports.routes import admin_reports_router
+from modules.daily_balance_snapshots.routes import admin_daily_balance_snapshots_router
 from modules.batches.routes import admin_batches_router
 from modules.transactions.routes import customer_transactions_router, admin_transactions_router
 
@@ -90,6 +91,11 @@ app.include_router(
     admin_reports_router,
     prefix=settings.API_V1_STR + "/admin/reports",
     tags=["admin-reports"],
+)
+app.include_router(
+    admin_daily_balance_snapshots_router,
+    prefix=settings.API_V1_STR + "/admin/daily-balance-snapshots",
+    tags=["admin-daily-balance-snapshots"],
 )
 app.include_router(
     admin_batches_router,
