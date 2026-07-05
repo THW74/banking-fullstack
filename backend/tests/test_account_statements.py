@@ -543,7 +543,6 @@ async def test_corrupted_ledger_target(client: AsyncClient):
     async with AsyncSession(engine, expire_on_commit=False) as db:
         customer = await create_role_user(db, "cust_corr", RoleChoicesSchema.CUSTOMER)
         acct = await create_active_account(db, customer.id)
-        other_acct = await create_active_account(db, customer.id)
         admin = await create_role_user(db, "ad_corr", RoleChoicesSchema.ADMIN)
 
         await create_snapshot(db, acct.id, date(2026, 7, 1), AccountCurrencyEnum.USD, Decimal("100.00"), Decimal("100.00"))
@@ -564,10 +563,13 @@ async def test_corrupted_ledger_target(client: AsyncClient):
         await db.commit()
         await db.refresh(txn)
 
-        # Manipulate LedgerEntry so it queries for acct but targets other_acct inside the record
+        internal_acct = await get_or_create_test_internal_account(db, AccountCurrencyEnum.USD)
+
+        # Manipulate LedgerEntry so it has BOTH customer_account_id and internal_account_id (corrupted!)
         entry = LedgerEntry(
             transaction_id=txn.id,
-            customer_account_id=other_acct.id, # Mismatched target!
+            customer_account_id=acct.id,
+            internal_account_id=internal_acct.id, # Corrupted target: both set!
             entry_type=LedgerEntryTypeEnum.CREDIT,
             amount=Decimal("50.00"),
             currency=AccountCurrencyEnum.USD,
@@ -577,7 +579,6 @@ async def test_corrupted_ledger_target(client: AsyncClient):
         db.add(entry)
 
         # To keep the database balanced, insert an opposing ledger entry on a test internal account!
-        internal_acct = await get_or_create_test_internal_account(db, AccountCurrencyEnum.USD)
         opposing_entry = LedgerEntry(
             transaction_id=txn.id,
             internal_account_id=internal_acct.id,
@@ -590,49 +591,20 @@ async def test_corrupted_ledger_target(client: AsyncClient):
         db.add(opposing_entry)
 
         await db.commit()
-        await db.refresh(entry)
-
-    from unittest.mock import patch, MagicMock
 
     cookie = await login_and_get_cookie(client, customer.email)
     client.cookies.update(cookie)
 
-    # We patch the DB query for lines in BankAccountService.get_account_statement to return the mismatched ledger entry.
-    # The actual query has `.where(col(LedgerEntry.customer_account_id) == account_id)`.
-    # To bypass it in a test and inject the corrupted entry, we mock the lines result inside get_account_statement:
-    from modules.accounts.services import bank_account_service
-
-    # We want to intercept the lines database results. Let's mock bank_account_service.get_account_statement itself 
-    # to trigger the error, or intercept the db session return value.
-    # Intercepting db.execute call is easy and allows us to verify the actual check executes:
-    original_get_account_statement = bank_account_service.get_account_statement
-
-    async def mock_get_account_statement(db, account_id, from_date, to_date, limit, offset, user_id=None):
-        # We simulate the exact logic but inject the corrupted entry
-        # First verify permissions / account load
-        if user_id is not None:
-            await bank_account_service.get_customer_account(db, account_id, user_id)
-        else:
-            await bank_account_service.get_account_by_id_for_admin(db, account_id)
-
-        # Get snapshots
-        from_snapshot = await db.scalar(select(DailyBalanceSnapshot).where(
-            DailyBalanceSnapshot.account_id == account_id,
-            DailyBalanceSnapshot.business_date == from_date
-        ))
-        to_snapshot = await db.scalar(select(DailyBalanceSnapshot).where(
-            DailyBalanceSnapshot.account_id == account_id,
-            DailyBalanceSnapshot.business_date == to_date
-        ))
-        if not from_snapshot or not to_snapshot:
-            from fastapi import HTTPException
-            raise HTTPException(409, "Daily balance snapshot is required")
-
-        # Now raise 500 directly since we validated target corruption
-        from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail="Corrupted ledger target detected")
-
-    with patch.object(bank_account_service, "get_account_statement", side_effect=mock_get_account_statement):
+    try:
+        # Directly hit the statement API without any mocks.
+        # The real service should catch the corrupted record and raise a 500 error.
         resp = await client.get(f"/api/v1/customer/accounts/{acct.id}/statement?from_date=2026-07-01&to_date=2026-07-01")
         assert resp.status_code == 500
-        assert resp.json()["detail"] == "Corrupted ledger target detected"
+        assert resp.json()["detail"] == "Ledger entry must reference exactly one account target"
+    finally:
+        # Clean up the corrupted records from the DB to prevent database pollution
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            from sqlalchemy import delete
+            await db.execute(delete(LedgerEntry).where(LedgerEntry.transaction_id == txn.id))
+            await db.execute(delete(Transaction).where(Transaction.id == txn.id))
+            await db.commit()

@@ -233,14 +233,16 @@ class BankAccountService:
         # 2. Get snapshots for from_date and to_date
         from_stmt = select(DailyBalanceSnapshot).where(
             DailyBalanceSnapshot.account_id == account_id,
-            DailyBalanceSnapshot.business_date == from_date
+            DailyBalanceSnapshot.business_date == from_date,
+            DailyBalanceSnapshot.currency == account.currency,
         )
         from_res = await db.execute(from_stmt)
         from_snapshot = from_res.scalar_one_or_none()
 
         to_stmt = select(DailyBalanceSnapshot).where(
             DailyBalanceSnapshot.account_id == account_id,
-            DailyBalanceSnapshot.business_date == to_date
+            DailyBalanceSnapshot.business_date == to_date,
+            DailyBalanceSnapshot.currency == account.currency,
         )
         to_res = await db.execute(to_stmt)
         to_snapshot = to_res.scalar_one_or_none()
@@ -260,6 +262,24 @@ class BankAccountService:
 
         accounting_date = func.coalesce(Transaction.posted_at, LedgerEntry.created_at)
 
+        # 3b. Pre-check for any corrupted targets in this period (O(1) limit 1 check)
+        corruption_stmt = (
+            select(LedgerEntry.id)
+            .join(Transaction, col(LedgerEntry.transaction_id) == col(Transaction.id))
+            .where(col(LedgerEntry.customer_account_id) == account_id)
+            .where(col(LedgerEntry.currency) == account.currency)
+            .where(col(LedgerEntry.internal_account_id).is_not(None))
+            .where(accounting_date >= start_at)
+            .where(accounting_date < end_at)
+            .limit(1)
+        )
+        corruption_res = await db.execute(corruption_stmt)
+        if corruption_res.first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ledger entry must reference exactly one account target",
+            )
+
         # 4. Sum debits, credits, unique transactions, and lines for complete-period totals
         sum_debit = func.coalesce(
             func.sum(case((col(LedgerEntry.entry_type) == LedgerEntryTypeEnum.DEBIT, col(LedgerEntry.amount)), else_=Decimal("0.00"))),
@@ -276,6 +296,7 @@ class BankAccountService:
             select(sum_debit, sum_credit, count_txn, count_line)
             .join(Transaction, col(LedgerEntry.transaction_id) == col(Transaction.id))
             .where(col(LedgerEntry.customer_account_id) == account_id)
+            .where(col(LedgerEntry.currency) == account.currency)
             .where(accounting_date >= start_at)
             .where(accounting_date < end_at)
         )
@@ -294,6 +315,7 @@ class BankAccountService:
             select(LedgerEntry, Transaction)
             .join(Transaction, col(LedgerEntry.transaction_id) == col(Transaction.id))
             .where(col(LedgerEntry.customer_account_id) == account_id)
+            .where(col(LedgerEntry.currency) == account.currency)
             .where(accounting_date >= start_at)
             .where(accounting_date < end_at)
             .order_by(
@@ -313,11 +335,7 @@ class BankAccountService:
         lines_list: list[AccountStatementLineSchema] = []
         for entry, txn in paginated_lines:
             # Validate corrupted ledger entry target
-            if entry.customer_account_id != account_id:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Corrupted ledger target detected"
-                )
+            self._validate_statement_ledger_target(entry, account_id)
 
             debit_amount = entry.amount if entry.entry_type == LedgerEntryTypeEnum.DEBIT else Decimal("0.00")
             credit_amount = entry.amount if entry.entry_type == LedgerEntryTypeEnum.CREDIT else Decimal("0.00")
@@ -362,6 +380,17 @@ class BankAccountService:
             has_more=has_more,
             lines=lines_list,
         )
+
+    def _validate_statement_ledger_target(
+        self,
+        entry: LedgerEntry,
+        account_id: uuid.UUID,
+    ) -> None:
+        if entry.customer_account_id != account_id or entry.internal_account_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ledger entry must reference exactly one account target",
+            )
 
 
 bank_account_service = BankAccountService()
