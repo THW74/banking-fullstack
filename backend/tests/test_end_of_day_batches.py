@@ -17,9 +17,11 @@ from modules.accounts.models import BankAccount, InternalAccount
 from modules.auth.services import auth_service
 from modules.batches.enums import (
     EndOfDayBatchStatusEnum,
+    EndOfDayValidationIssueSeverityEnum,
     EndOfDayValidationIssueTypeEnum,
 )
 from modules.batches.models import EndOfDayBatch
+from modules.daily_balance_snapshots.models import DailyBalanceSnapshot
 from modules.transactions.enums import (
     LedgerEntryTypeEnum,
     TransactionStatusEnum,
@@ -248,12 +250,20 @@ async def run_end_of_day(
     client: AsyncClient,
     cookie: dict[str, str],
     business_date: date,
+    *,
+    run_notes: str | None = None,
+    check_daily_snapshots: bool = False,
 ) -> dict:
     client.cookies.clear()
     client.cookies.update(cookie)
+    payload: dict[str, object] = {"business_date": business_date.isoformat()}
+    if run_notes is not None:
+        payload["run_notes"] = run_notes
+    if check_daily_snapshots:
+        payload["check_daily_snapshots"] = check_daily_snapshots
     resp = await client.post(
         "/api/v1/admin/batches/end-of-day",
-        json={"business_date": business_date.isoformat()},
+        json=payload,
     )
     assert resp.status_code == 200, resp.text
     return resp.json()
@@ -289,6 +299,35 @@ def summary_by_currency(batch: dict, currency: AccountCurrencyEnum) -> dict:
         for summary in batch["summaries"]
         if summary["currency"] == currency.value
     )
+
+
+def issue_messages(batch: dict, issue_type: EndOfDayValidationIssueTypeEnum) -> list[str]:
+    return [
+        issue["message"]
+        for issue in batch["validation_issues"]
+        if issue["issue_type"] == issue_type.value
+    ]
+
+
+async def create_daily_snapshot(
+    db: AsyncSession,
+    account: BankAccount,
+    business_date: date,
+) -> DailyBalanceSnapshot:
+    snapshot = DailyBalanceSnapshot(
+        account_id=account.id,
+        business_date=business_date,
+        currency=account.currency,
+        opening_balance=account.current_balance,
+        closing_balance=account.current_balance,
+        available_balance=account.available_balance,
+        current_balance=account.current_balance,
+        transaction_count=1,
+    )
+    db.add(snapshot)
+    await db.commit()
+    await db.refresh(snapshot)
+    return snapshot
 
 
 async def create_manual_transaction(
@@ -437,13 +476,22 @@ async def test_end_of_day_auth_rbac_missing_invalid_and_empty_close(
     assert resp.status_code == 422
 
     admin_batch = await run_end_of_day(
-        client, cookies["admin"], date(2038, 1, 1)
+        client,
+        cookies["admin"],
+        date(2038, 1, 1),
+        run_notes="empty close check",
     )
     assert admin_batch["status"] == EndOfDayBatchStatusEnum.COMPLETED.value
     assert admin_batch["transaction_count"] == 0
     assert admin_batch["ledger_entry_count"] == 0
     assert admin_batch["currency_count"] == 0
     assert admin_batch["validation_issue_count"] == 0
+    assert admin_batch["error_issue_count"] == 0
+    assert admin_batch["warning_issue_count"] == 0
+    assert admin_batch["snapshot_count"] == 0
+    assert admin_batch["snapshot_missing_count"] == 0
+    assert admin_batch["check_daily_snapshots"] is False
+    assert admin_batch["run_notes"] == "empty close check"
     assert admin_batch["is_balanced"] is True
     assert admin_batch["summaries"] == []
     assert admin_batch["validation_issues"] == []
@@ -520,6 +568,12 @@ async def test_end_of_day_activity_summaries_duplicates_list_and_detail(
     assert batch["ledger_entry_count"] == 15
     assert batch["currency_count"] == 2
     assert batch["validation_issue_count"] == 0
+    assert batch["error_issue_count"] == 0
+    assert batch["warning_issue_count"] == 0
+    assert batch["snapshot_count"] == 0
+    assert batch["snapshot_missing_count"] == 0
+    assert batch["check_daily_snapshots"] is False
+    assert batch["run_notes"] is None
     assert batch["is_balanced"] is True
     assert batch["failure_reason"] is None
 
@@ -537,10 +591,19 @@ async def test_end_of_day_activity_summaries_duplicates_list_and_detail(
     assert decimal_value(eur_summary["total_credit"]) == Decimal("77.00")
     assert eur_summary["is_balanced"] is True
 
-    duplicate = await run_end_of_day(client, admin_cookie, business_date)
+    duplicate = await run_end_of_day(
+        client,
+        admin_cookie,
+        business_date,
+        run_notes="must not mutate completed close",
+        check_daily_snapshots=True,
+    )
     assert duplicate["id"] == batch["id"]
     assert duplicate["completed_at"] == batch["completed_at"]
     assert duplicate["validation_issue_count"] == 0
+    assert duplicate["warning_issue_count"] == 0
+    assert duplicate["check_daily_snapshots"] is False
+    assert duplicate["run_notes"] is None
 
     client.cookies.clear()
     client.cookies.update(admin_cookie)
@@ -590,13 +653,28 @@ async def test_end_of_day_failed_batch_can_rerun_after_data_is_fixed(
         await db.commit()
 
     admin_cookie = await login_and_get_cookie(client, admin.email)
-    failed_batch = await run_end_of_day(client, admin_cookie, business_date)
+    failed_batch = await run_end_of_day(
+        client,
+        admin_cookie,
+        business_date,
+        run_notes="first failed run",
+        check_daily_snapshots=True,
+    )
     assert failed_batch["status"] == EndOfDayBatchStatusEnum.FAILED.value
     assert failed_batch["failure_reason"] == "Validation failed"
     assert failed_batch["is_balanced"] is False
     assert failed_batch["validation_issue_count"] == 1
+    assert failed_batch["error_issue_count"] == 1
+    assert failed_batch["warning_issue_count"] == 0
+    assert failed_batch["snapshot_count"] == 0
+    assert failed_batch["snapshot_missing_count"] == 0
+    assert failed_batch["check_daily_snapshots"] is True
+    assert failed_batch["run_notes"] == "first failed run"
     assert failed_batch["validation_issues"][0]["issue_type"] == (
         EndOfDayValidationIssueTypeEnum.MISSING_LEDGER_ENTRIES.value
+    )
+    assert failed_batch["validation_issues"][0]["severity"] == (
+        EndOfDayValidationIssueSeverityEnum.ERROR.value
     )
 
     async with AsyncSession(engine, expire_on_commit=False) as db:
@@ -616,11 +694,22 @@ async def test_end_of_day_failed_batch_can_rerun_after_data_is_fixed(
         )
         await db.commit()
 
-    completed_batch = await run_end_of_day(client, admin_cookie, business_date)
+    completed_batch = await run_end_of_day(
+        client,
+        admin_cookie,
+        business_date,
+        run_notes="fixed rerun",
+    )
     assert completed_batch["id"] == failed_batch["id"]
     assert completed_batch["status"] == EndOfDayBatchStatusEnum.COMPLETED.value
     assert completed_batch["failure_reason"] is None
     assert completed_batch["validation_issue_count"] == 0
+    assert completed_batch["error_issue_count"] == 0
+    assert completed_batch["warning_issue_count"] == 0
+    assert completed_batch["snapshot_count"] == 0
+    assert completed_batch["snapshot_missing_count"] == 0
+    assert completed_batch["check_daily_snapshots"] is False
+    assert completed_batch["run_notes"] == "fixed rerun"
     assert completed_batch["validation_issues"] == []
     assert completed_batch["currency_count"] == 1
 
@@ -679,7 +768,7 @@ async def test_end_of_day_validation_issues_create_failed_batch(
         )
         internal_account = await create_internal_account(db, AccountCurrencyEnum.GBP)
 
-        await create_manual_transaction(
+        missing_entries = await create_manual_transaction(
             db,
             admin.id,
             business_date,
@@ -787,6 +876,12 @@ async def test_end_of_day_validation_issues_create_failed_batch(
     assert batch["failure_reason"] == "Validation failed"
     assert batch["is_balanced"] is False
     assert batch["validation_issue_count"] >= 5
+    assert batch["error_issue_count"] == batch["validation_issue_count"]
+    assert batch["warning_issue_count"] == 0
+    assert all(
+        issue["severity"] == EndOfDayValidationIssueSeverityEnum.ERROR.value
+        for issue in batch["validation_issues"]
+    )
 
     issue_types = {issue["issue_type"] for issue in batch["validation_issues"]}
     assert EndOfDayValidationIssueTypeEnum.INVALID_LEDGER_TARGET.value in issue_types
@@ -797,3 +892,327 @@ async def test_end_of_day_validation_issues_create_failed_batch(
         EndOfDayValidationIssueTypeEnum.FAILED_TRANSACTION_HAS_LEDGER_ENTRIES.value
         in issue_types
     )
+
+    invalid_target_messages = issue_messages(
+        batch, EndOfDayValidationIssueTypeEnum.INVALID_LEDGER_TARGET
+    )
+    assert any(invalid_target.reference in message for message in invalid_target_messages)
+    assert any("expected exactly one" in message for message in invalid_target_messages)
+    assert any("no account target" in message for message in invalid_target_messages)
+
+    missing_messages = issue_messages(
+        batch, EndOfDayValidationIssueTypeEnum.MISSING_LEDGER_ENTRIES
+    )
+    assert any(missing_entries.reference in message for message in missing_messages)
+    assert any("status posted" in message for message in missing_messages)
+
+    unbalanced_messages = issue_messages(
+        batch, EndOfDayValidationIssueTypeEnum.UNBALANCED_TRANSACTION
+    )
+    assert any(unbalanced.reference in message for message in unbalanced_messages)
+    assert any("debit_total=3.00" in message for message in unbalanced_messages)
+    assert any("credit_total=2.00" in message for message in unbalanced_messages)
+
+    mismatch_messages = issue_messages(
+        batch, EndOfDayValidationIssueTypeEnum.CURRENCY_MISMATCH
+    )
+    assert any(mismatch.reference in message for message in mismatch_messages)
+    assert any("expected GBP, actual EUR" in message for message in mismatch_messages)
+
+    failed_messages = issue_messages(
+        batch,
+        EndOfDayValidationIssueTypeEnum.FAILED_TRANSACTION_HAS_LEDGER_ENTRIES,
+    )
+    assert any(failed_with_entries.reference in message for message in failed_messages)
+    assert any("expected none" in message for message in failed_messages)
+
+
+async def test_end_of_day_missing_snapshot_warnings_are_non_fatal_and_distinct(
+    client: AsyncClient,
+):
+    from infrastructure.database import engine
+
+    business_date = date(2099, 5, 5)
+    unique = uuid.uuid4().hex[:6]
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        customer = await create_role_user(
+            db, f"eods_c_{unique}", RoleChoicesSchema.CUSTOMER
+        )
+        admin = await create_role_user(
+            db, f"eods_a_{unique}", RoleChoicesSchema.ADMIN
+        )
+        covered_account = await create_active_account(
+            db, customer.id, Decimal("0.00"), AccountCurrencyEnum.GBP, "EOD Covered"
+        )
+        missing_account = await create_active_account(
+            db, customer.id, Decimal("0.00"), AccountCurrencyEnum.GBP, "EOD Missing"
+        )
+
+    admin_cookie = await login_and_get_cookie(client, admin.email)
+    covered_deposit = await post_deposit(client, admin_cookie, covered_account.id, "10.00")
+    missing_deposit_one = await post_deposit(
+        client, admin_cookie, missing_account.id, "20.00"
+    )
+    missing_deposit_two = await post_deposit(
+        client, admin_cookie, missing_account.id, "30.00"
+    )
+
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        await move_transactions_to_business_date(
+            db,
+            [
+                covered_deposit["id"],
+                missing_deposit_one["id"],
+                missing_deposit_two["id"],
+            ],
+            business_date,
+        )
+        await create_daily_snapshot(db, covered_account, business_date)
+
+    batch = await run_end_of_day(
+        client,
+        admin_cookie,
+        business_date,
+        run_notes="snapshot coverage check",
+        check_daily_snapshots=True,
+    )
+    assert batch["status"] == EndOfDayBatchStatusEnum.COMPLETED.value
+    assert batch["failure_reason"] is None
+    assert batch["is_balanced"] is True
+    assert batch["validation_issue_count"] == 1
+    assert batch["error_issue_count"] == 0
+    assert batch["warning_issue_count"] == 1
+    assert batch["snapshot_count"] == 1
+    assert batch["snapshot_missing_count"] == 1
+    assert batch["check_daily_snapshots"] is True
+    assert batch["run_notes"] == "snapshot coverage check"
+
+    warning = batch["validation_issues"][0]
+    assert warning["issue_type"] == (
+        EndOfDayValidationIssueTypeEnum.MISSING_DAILY_BALANCE_SNAPSHOT.value
+    )
+    assert warning["severity"] == EndOfDayValidationIssueSeverityEnum.WARNING.value
+    assert warning["currency"] == AccountCurrencyEnum.GBP.value
+    assert warning["customer_account_id"] == str(missing_account.id)
+    assert warning["transaction_id"] is None
+    assert warning["ledger_entry_id"] is None
+
+    client.cookies.clear()
+    client.cookies.update(admin_cookie)
+    resp = await client.get(
+        f"/api/v1/admin/batches/end-of-day/{batch['id']}",
+        params={
+            "issue_type": (
+                EndOfDayValidationIssueTypeEnum.MISSING_DAILY_BALANCE_SNAPSHOT.value
+            ),
+            "issue_severity": EndOfDayValidationIssueSeverityEnum.WARNING.value,
+        },
+    )
+    assert resp.status_code == 200
+    detail = resp.json()
+    assert detail["validation_issue_count"] == 1
+    assert len(detail["validation_issues"]) == 1
+    assert detail["validation_issues"][0]["id"] == warning["id"]
+
+
+async def test_end_of_day_skips_snapshot_warnings_when_check_is_disabled(
+    client: AsyncClient,
+):
+    from infrastructure.database import engine
+
+    business_date = date(2099, 5, 6)
+    unique = uuid.uuid4().hex[:6]
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        customer = await create_role_user(
+            db, f"eodn_c_{unique}", RoleChoicesSchema.CUSTOMER
+        )
+        admin = await create_role_user(
+            db, f"eodn_a_{unique}", RoleChoicesSchema.ADMIN
+        )
+        account = await create_active_account(
+            db, customer.id, Decimal("0.00"), AccountCurrencyEnum.GBP
+        )
+
+    admin_cookie = await login_and_get_cookie(client, admin.email)
+    deposit = await post_deposit(client, admin_cookie, account.id, "12.00")
+
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        await move_transactions_to_business_date(
+            db, [deposit["id"]], business_date
+        )
+
+    batch = await run_end_of_day(client, admin_cookie, business_date)
+    assert batch["status"] == EndOfDayBatchStatusEnum.COMPLETED.value
+    assert batch["validation_issue_count"] == 0
+    assert batch["error_issue_count"] == 0
+    assert batch["warning_issue_count"] == 0
+    assert batch["snapshot_count"] == 0
+    assert batch["snapshot_missing_count"] == 0
+    assert batch["check_daily_snapshots"] is False
+
+
+async def test_end_of_day_list_filters_and_detail_issue_filters(
+    client: AsyncClient,
+):
+    from infrastructure.database import engine
+
+    completed_date = date(2099, 5, 7)
+    failed_date = date(2099, 5, 8)
+    unique = uuid.uuid4().hex[:6]
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        customer = await create_role_user(
+            db, f"eodl_c_{unique}", RoleChoicesSchema.CUSTOMER
+        )
+        admin = await create_role_user(
+            db, f"eodl_a_{unique}", RoleChoicesSchema.ADMIN
+        )
+        eur_account = await create_active_account(
+            db, customer.id, Decimal("0.00"), AccountCurrencyEnum.EUR, "EOD EUR List"
+        )
+        await create_manual_transaction(
+            db,
+            admin.id,
+            failed_date,
+            amount=Decimal("45.00"),
+            currency=AccountCurrencyEnum.GBP,
+        )
+        await db.commit()
+
+    admin_cookie = await login_and_get_cookie(client, admin.email)
+    eur_deposit = await post_deposit(client, admin_cookie, eur_account.id, "15.00")
+
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        await move_transactions_to_business_date(
+            db, [eur_deposit["id"]], completed_date
+        )
+
+    completed_batch = await run_end_of_day(client, admin_cookie, completed_date)
+    failed_batch = await run_end_of_day(client, admin_cookie, failed_date)
+    assert completed_batch["status"] == EndOfDayBatchStatusEnum.COMPLETED.value
+    assert failed_batch["status"] == EndOfDayBatchStatusEnum.FAILED.value
+
+    client.cookies.clear()
+    client.cookies.update(admin_cookie)
+    resp = await client.get(
+        "/api/v1/admin/batches/end-of-day",
+        params={
+            "business_date": completed_date.isoformat(),
+            "from_date": completed_date.isoformat(),
+        },
+    )
+    assert resp.status_code == 400
+
+    resp = await client.get(
+        "/api/v1/admin/batches/end-of-day",
+        params={
+            "from_date": failed_date.isoformat(),
+            "to_date": completed_date.isoformat(),
+        },
+    )
+    assert resp.status_code == 400
+
+    resp = await client.get(
+        "/api/v1/admin/batches/end-of-day",
+        params={
+            "from_date": completed_date.isoformat(),
+            "to_date": failed_date.isoformat(),
+            "currency": AccountCurrencyEnum.EUR.value,
+        },
+    )
+    assert resp.status_code == 200
+    assert [item["id"] for item in resp.json()] == [completed_batch["id"]]
+
+    resp = await client.get(
+        "/api/v1/admin/batches/end-of-day",
+        params={
+            "from_date": completed_date.isoformat(),
+            "to_date": failed_date.isoformat(),
+            "currency": AccountCurrencyEnum.GBP.value,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    resp = await client.get(
+        "/api/v1/admin/batches/end-of-day",
+        params={
+            "from_date": completed_date.isoformat(),
+            "to_date": failed_date.isoformat(),
+            "has_validation_issues": "true",
+        },
+    )
+    assert resp.status_code == 200
+    assert [item["id"] for item in resp.json()] == [failed_batch["id"]]
+
+    resp = await client.get(
+        "/api/v1/admin/batches/end-of-day",
+        params={
+            "from_date": completed_date.isoformat(),
+            "to_date": failed_date.isoformat(),
+            "has_validation_issues": "false",
+        },
+    )
+    assert resp.status_code == 200
+    assert [item["id"] for item in resp.json()] == [completed_batch["id"]]
+
+    resp = await client.get(
+        "/api/v1/admin/batches/end-of-day",
+        params={
+            "from_date": completed_date.isoformat(),
+            "to_date": failed_date.isoformat(),
+            "is_balanced": "false",
+        },
+    )
+    assert resp.status_code == 200
+    assert [item["id"] for item in resp.json()] == [failed_batch["id"]]
+
+    resp = await client.get(
+        "/api/v1/admin/batches/end-of-day",
+        params={
+            "business_date": completed_date.isoformat(),
+            "requested_by_user_id": str(admin.id),
+        },
+    )
+    assert resp.status_code == 200
+    assert [item["id"] for item in resp.json()] == [completed_batch["id"]]
+
+    resp = await client.get(
+        "/api/v1/admin/batches/end-of-day",
+        params={
+            "business_date": completed_date.isoformat(),
+            "requested_by_user_id": str(uuid.uuid4()),
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    resp = await client.get(
+        f"/api/v1/admin/batches/end-of-day/{failed_batch['id']}",
+        params={
+            "issue_type": EndOfDayValidationIssueTypeEnum.MISSING_LEDGER_ENTRIES.value
+        },
+    )
+    assert resp.status_code == 200
+    issue_type_detail = resp.json()
+    assert len(issue_type_detail["validation_issues"]) == 1
+    assert issue_type_detail["validation_issues"][0]["issue_type"] == (
+        EndOfDayValidationIssueTypeEnum.MISSING_LEDGER_ENTRIES.value
+    )
+
+    resp = await client.get(
+        f"/api/v1/admin/batches/end-of-day/{failed_batch['id']}",
+        params={"issue_severity": EndOfDayValidationIssueSeverityEnum.ERROR.value},
+    )
+    assert resp.status_code == 200
+    severity_detail = resp.json()
+    assert len(severity_detail["validation_issues"]) == 1
+    assert severity_detail["validation_issues"][0]["severity"] == (
+        EndOfDayValidationIssueSeverityEnum.ERROR.value
+    )
+
+    resp = await client.get(
+        f"/api/v1/admin/batches/end-of-day/{failed_batch['id']}",
+        params={"issue_severity": EndOfDayValidationIssueSeverityEnum.WARNING.value},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["validation_issues"] == []

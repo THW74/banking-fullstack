@@ -7,7 +7,11 @@ from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from modules.accounts.enums import AccountCurrencyEnum
-from .enums import EndOfDayBatchStatusEnum, EndOfDayValidationIssueTypeEnum
+from .enums import (
+    EndOfDayBatchStatusEnum,
+    EndOfDayValidationIssueSeverityEnum,
+    EndOfDayValidationIssueTypeEnum,
+)
 
 
 class EndOfDayBatch(SQLModel, table=True):
@@ -32,6 +36,12 @@ class EndOfDayBatch(SQLModel, table=True):
     ledger_entry_count: int = Field(default=0)
     currency_count: int = Field(default=0)
     validation_issue_count: int = Field(default=0)
+    error_issue_count: int = Field(default=0)
+    warning_issue_count: int = Field(default=0)
+    snapshot_count: int = Field(default=0)
+    snapshot_missing_count: int = Field(default=0)
+    check_daily_snapshots: bool = Field(default=False)
+    run_notes: str | None = Field(default=None, max_length=500)
     is_balanced: bool = Field(default=True)
     failure_reason: str | None = Field(default=None, max_length=255)
 
@@ -78,7 +88,16 @@ class EndOfDayBatchValidationIssue(SQLModel, table=True):
         foreign_key="end_of_day_batches.id", nullable=False, index=True
     )
     issue_type: EndOfDayValidationIssueTypeEnum = Field(nullable=False, index=True)
+    severity: EndOfDayValidationIssueSeverityEnum = Field(
+        default=EndOfDayValidationIssueSeverityEnum.ERROR,
+        nullable=False,
+        index=True,
+    )
     message: str = Field(max_length=500, nullable=False)
+    currency: AccountCurrencyEnum | None = Field(default=None, index=True)
+    customer_account_id: uuid.UUID | None = Field(
+        default=None, foreign_key="bank_accounts.id", index=True
+    )
     transaction_id: uuid.UUID | None = Field(
         default=None, foreign_key="transactions.id", index=True
     )

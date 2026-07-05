@@ -7,9 +7,15 @@ class EndOfDayBatchStatusEnum(str, Enum):
     FAILED = "failed"
 
 
+class EndOfDayValidationIssueSeverityEnum(str, Enum):
+    ERROR = "error"
+    WARNING = "warning"
+
+
 class EndOfDayValidationIssueTypeEnum(str, Enum):
     INVALID_LEDGER_TARGET = "invalid_ledger_target"
     MISSING_LEDGER_ENTRIES = "missing_ledger_entries"
     UNBALANCED_TRANSACTION = "unbalanced_transaction"
     CURRENCY_MISMATCH = "currency_mismatch"
     FAILED_TRANSACTION_HAS_LEDGER_ENTRIES = "failed_transaction_has_ledger_entries"
+    MISSING_DAILY_BALANCE_SNAPSHOT = "missing_daily_balance_snapshot"
