@@ -14,6 +14,8 @@ from modules.transactions.enums import LedgerEntryTypeEnum, TransactionTypeEnum
 from modules.transactions.models import LedgerEntry, Transaction
 from .schemas import (
     AccountTargetType,
+    GeneralLedgerAccountSummaryLineSchema,
+    GeneralLedgerAccountSummaryReportSchema,
     GeneralLedgerEntrySchema,
     GeneralLedgerReportSchema,
     TrialBalanceLineSchema,
@@ -31,6 +33,18 @@ class _TrialBalanceAccumulator:
     debit_total: Decimal = field(default_factory=lambda: Decimal("0.00"))
     credit_total: Decimal = field(default_factory=lambda: Decimal("0.00"))
     last_posted_at: datetime | None = None
+
+
+@dataclass
+class _GeneralLedgerAccountSummaryAccumulator:
+    account_target_type: AccountTargetType
+    account_id: uuid.UUID
+    currency: AccountCurrencyEnum
+    transaction_ids: set[uuid.UUID] = field(default_factory=set)
+    ledger_entry_count: int = 0
+    debit_total: Decimal = field(default_factory=lambda: Decimal("0.00"))
+    credit_total: Decimal = field(default_factory=lambda: Decimal("0.00"))
+    last_activity_at: datetime | None = None
 
 
 class ReportService:
@@ -274,6 +288,170 @@ class ReportService:
             entries=entries,
         )
 
+    async def get_general_ledger_account_summary(
+        self,
+        db: AsyncSession,
+        currency: AccountCurrencyEnum,
+        from_date: date,
+        to_date: date,
+        account_target_type: AccountTargetType | None = None,
+        account_id: uuid.UUID | None = None,
+        account_code: str | None = None,
+        transaction_type: TransactionTypeEnum | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> GeneralLedgerAccountSummaryReportSchema:
+        if from_date > to_date:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="from_date must be before or equal to to_date",
+            )
+
+        if account_id is not None and account_target_type is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="account_target_type is required when account_id is provided",
+            )
+
+        start_at = datetime.combine(from_date, time.min)
+        end_at = datetime.combine(to_date + timedelta(days=1), time.min)
+        accounting_date = func.coalesce(Transaction.posted_at, LedgerEntry.created_at)
+
+        statement = (
+            select(LedgerEntry, Transaction)
+            .join(Transaction, col(LedgerEntry.transaction_id) == col(Transaction.id))
+            .outerjoin(
+                BankAccount,
+                col(LedgerEntry.customer_account_id) == col(BankAccount.id),
+            )
+            .outerjoin(
+                InternalAccount,
+                col(LedgerEntry.internal_account_id) == col(InternalAccount.id),
+            )
+            .where(LedgerEntry.currency == currency)
+            .where(accounting_date >= start_at)
+            .where(accounting_date < end_at)
+        )
+
+        if transaction_type is not None:
+            statement = statement.where(Transaction.transaction_type == transaction_type)
+
+        if account_target_type == "customer_account":
+            statement = statement.where(col(LedgerEntry.customer_account_id).is_not(None))
+            if account_id is not None:
+                statement = statement.where(LedgerEntry.customer_account_id == account_id)
+            if account_code is not None:
+                statement = statement.where(BankAccount.account_number == account_code)
+        elif account_target_type == "internal_account":
+            statement = statement.where(col(LedgerEntry.internal_account_id).is_not(None))
+            if account_id is not None:
+                statement = statement.where(LedgerEntry.internal_account_id == account_id)
+            if account_code is not None:
+                statement = statement.where(InternalAccount.account_code == account_code)
+        elif account_code is not None:
+            statement = statement.where(
+                or_(
+                    col(BankAccount.account_number) == account_code,
+                    col(InternalAccount.account_code) == account_code,
+                )
+            )
+
+        result = await db.execute(statement)
+        accumulators: dict[
+            tuple[AccountTargetType, uuid.UUID, AccountCurrencyEnum],
+            _GeneralLedgerAccountSummaryAccumulator,
+        ] = {}
+
+        for ledger_entry, transaction in result.all():
+            target_type, target_id = self._get_ledger_target(ledger_entry)
+            key = (target_type, target_id, ledger_entry.currency)
+            accumulator = accumulators.setdefault(
+                key,
+                _GeneralLedgerAccountSummaryAccumulator(
+                    account_target_type=target_type,
+                    account_id=target_id,
+                    currency=ledger_entry.currency,
+                ),
+            )
+
+            amount = self._normalize_amount(ledger_entry.amount)
+            if ledger_entry.entry_type == LedgerEntryTypeEnum.DEBIT:
+                accumulator.debit_total += amount
+            else:
+                accumulator.credit_total += amount
+            accumulator.transaction_ids.add(transaction.id)
+            accumulator.ledger_entry_count += 1
+
+            activity_at = transaction.posted_at or ledger_entry.created_at
+            if (
+                accumulator.last_activity_at is None
+                or activity_at > accumulator.last_activity_at
+            ):
+                accumulator.last_activity_at = activity_at
+
+        customer_accounts = await self._get_customer_accounts(
+            db,
+            [
+                account_id
+                for target_type, account_id, _currency in accumulators
+                if target_type == "customer_account"
+            ],
+        )
+        internal_accounts = await self._get_internal_accounts(
+            db,
+            [
+                account_id
+                for target_type, account_id, _currency in accumulators
+                if target_type == "internal_account"
+            ],
+        )
+
+        summary_lines = [
+            self._build_general_ledger_account_summary_line(
+                accumulator,
+                customer_accounts,
+                internal_accounts,
+            )
+            for accumulator in accumulators.values()
+        ]
+        summary_lines.sort(
+            key=lambda line: (
+                line.account_target_type,
+                line.account_code,
+                str(line.account_id),
+            )
+        )
+
+        page_candidates = summary_lines[offset : offset + limit + 1]
+        page_lines = page_candidates[:limit]
+        has_more = len(page_candidates) > limit
+
+        total_debit = Decimal("0.00")
+        total_credit = Decimal("0.00")
+        total_net_debit = Decimal("0.00")
+        total_net_credit = Decimal("0.00")
+        for line in page_lines:
+            total_debit += line.debit_total
+            total_credit += line.credit_total
+            total_net_debit += line.net_debit
+            total_net_credit += line.net_credit
+
+        return GeneralLedgerAccountSummaryReportSchema(
+            from_date=from_date,
+            to_date=to_date,
+            currency=currency,
+            generated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            total_debit=self._normalize_amount(total_debit),
+            total_credit=self._normalize_amount(total_credit),
+            total_net_debit=self._normalize_amount(total_net_debit),
+            total_net_credit=self._normalize_amount(total_net_credit),
+            account_count=len(page_lines),
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
+            accounts=page_lines,
+        )
+
     def _get_ledger_target(
         self, ledger_entry: LedgerEntry
     ) -> tuple[AccountTargetType, uuid.UUID]:
@@ -437,6 +615,74 @@ class ReportService:
             signed_amount=self._normalize_amount(signed_amount),
             description=transaction.description,
             created_by_user_id=transaction.created_by_user_id,
+        )
+
+    def _build_general_ledger_account_summary_line(
+        self,
+        accumulator: _GeneralLedgerAccountSummaryAccumulator,
+        customer_accounts: dict[uuid.UUID, BankAccount],
+        internal_accounts: dict[uuid.UUID, InternalAccount],
+    ) -> GeneralLedgerAccountSummaryLineSchema:
+        if accumulator.last_activity_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="General ledger account summary is missing activity date",
+            )
+
+        account_code: str
+        account_name: str
+        account_type: str
+        if accumulator.account_target_type == "customer_account":
+            account = customer_accounts.get(accumulator.account_id)
+            if account is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=(
+                        "Bank account metadata missing for general ledger "
+                        "account summary"
+                    ),
+                )
+            account_code = account.account_number
+            account_name = account.account_name
+            account_type = account.account_type.value
+        else:
+            account = internal_accounts.get(accumulator.account_id)
+            if account is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=(
+                        "Internal account metadata missing for general ledger "
+                        "account summary"
+                    ),
+                )
+            account_code = account.account_code
+            account_name = account.account_name
+            account_type = account.account_type.value
+
+        debit_total = self._normalize_amount(accumulator.debit_total)
+        credit_total = self._normalize_amount(accumulator.credit_total)
+        net = self._normalize_amount(debit_total - credit_total)
+        if net > Decimal("0.00"):
+            net_debit = net
+            net_credit = Decimal("0.00")
+        else:
+            net_debit = Decimal("0.00")
+            net_credit = -net
+
+        return GeneralLedgerAccountSummaryLineSchema(
+            account_target_type=accumulator.account_target_type,
+            account_id=accumulator.account_id,
+            account_code=account_code,
+            account_name=account_name,
+            account_type=account_type,
+            currency=accumulator.currency,
+            debit_total=debit_total,
+            credit_total=credit_total,
+            net_debit=net_debit,
+            net_credit=net_credit,
+            transaction_count=len(accumulator.transaction_ids),
+            ledger_entry_count=accumulator.ledger_entry_count,
+            last_activity_at=accumulator.last_activity_at,
         )
 
     def _normalize_amount(self, amount: Decimal) -> Decimal:

@@ -231,6 +231,40 @@ async def get_general_ledger(
     return resp.json()
 
 
+async def get_general_ledger_account_summary(
+    client: AsyncClient,
+    cookie: dict[str, str],
+    params: dict[str, str],
+) -> dict:
+    client.cookies.clear()
+    client.cookies.update(cookie)
+    resp = await client.get(
+        "/api/v1/admin/reports/general-ledger/accounts", params=params
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def move_transactions_to_report_date(
+    db: AsyncSession,
+    transaction_ids: list[str],
+    report_date: date,
+) -> None:
+    for index, transaction_id in enumerate(transaction_ids):
+        transaction = await db.get(Transaction, uuid.UUID(transaction_id))
+        assert transaction is not None
+        transaction.posted_at = datetime(
+            report_date.year,
+            report_date.month,
+            report_date.day,
+            12,
+            0,
+            index,
+        )
+        db.add(transaction)
+    await db.commit()
+
+
 def decimal_value(value: object) -> Decimal:
     return Decimal(str(value))
 
@@ -245,6 +279,32 @@ def transaction_entries(report: dict, transaction_id: str) -> list[dict]:
 
 def entry_ids(report: dict) -> list[str]:
     return [entry["ledger_entry_id"] for entry in report["entries"]]
+
+
+def summary_line_by_account_id(report: dict, account_id: uuid.UUID) -> dict | None:
+    return next(
+        (
+            line
+            for line in report["accounts"]
+            if line["account_id"] == str(account_id)
+        ),
+        None,
+    )
+
+
+def summary_line_by_account_code(report: dict, account_code: str) -> dict | None:
+    return next(
+        (
+            line
+            for line in report["accounts"]
+            if line["account_code"] == account_code
+        ),
+        None,
+    )
+
+
+def account_ids(report: dict) -> list[str]:
+    return [line["account_id"] for line in report["accounts"]]
 
 
 async def test_general_ledger_auth_rbac_validation_and_empty_report(
@@ -291,10 +351,20 @@ async def test_general_ledger_auth_rbac_validation_and_empty_report(
     resp = await client.get("/api/v1/admin/reports/general-ledger", params=params)
     assert resp.status_code == 401
 
+    resp = await client.get(
+        "/api/v1/admin/reports/general-ledger/accounts", params=params
+    )
+    assert resp.status_code == 401
+
     for role_name in ("customer", "teller", "account_exec"):
         client.cookies.clear()
         client.cookies.update(cookies[role_name])
         resp = await client.get("/api/v1/admin/reports/general-ledger", params=params)
+        assert resp.status_code == 403
+
+        resp = await client.get(
+            "/api/v1/admin/reports/general-ledger/accounts", params=params
+        )
         assert resp.status_code == 403
 
     client.cookies.clear()
@@ -302,8 +372,22 @@ async def test_general_ledger_auth_rbac_validation_and_empty_report(
     resp = await client.get("/api/v1/admin/reports/general-ledger")
     assert resp.status_code == 422
 
+    resp = await client.get("/api/v1/admin/reports/general-ledger/accounts")
+    assert resp.status_code == 422
+
     resp = await client.get(
         "/api/v1/admin/reports/general-ledger",
+        params={
+            "currency": AccountCurrencyEnum.DKK.value,
+            "from_date": "2026-07-06",
+            "to_date": "2026-07-05",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "from_date must be before or equal to to_date"
+
+    resp = await client.get(
+        "/api/v1/admin/reports/general-ledger/accounts",
         params={
             "currency": AccountCurrencyEnum.DKK.value,
             "from_date": "2026-07-06",
@@ -322,6 +406,15 @@ async def test_general_ledger_auth_rbac_validation_and_empty_report(
         "account_target_type is required when account_id is provided"
     )
 
+    resp = await client.get(
+        "/api/v1/admin/reports/general-ledger/accounts",
+        params={**params, "account_id": str(uuid.uuid4())},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == (
+        "account_target_type is required when account_id is provided"
+    )
+
     for role_name in ("branch_manager", "admin", "super_admin"):
         report = await get_general_ledger(client, cookies[role_name], params)
         assert report["currency"] == AccountCurrencyEnum.DKK.value
@@ -330,6 +423,18 @@ async def test_general_ledger_auth_rbac_validation_and_empty_report(
         assert report["entry_count"] == 0
         assert report["has_more"] is False
         assert report["entries"] == []
+
+        summary = await get_general_ledger_account_summary(
+            client, cookies[role_name], params
+        )
+        assert summary["currency"] == AccountCurrencyEnum.DKK.value
+        assert decimal_value(summary["total_debit"]) == Decimal("0.00")
+        assert decimal_value(summary["total_credit"]) == Decimal("0.00")
+        assert decimal_value(summary["total_net_debit"]) == Decimal("0.00")
+        assert decimal_value(summary["total_net_credit"]) == Decimal("0.00")
+        assert summary["account_count"] == 0
+        assert summary["has_more"] is False
+        assert summary["accounts"] == []
 
 
 async def test_general_ledger_activity_filters_reversals_and_pagination(
@@ -363,7 +468,7 @@ async def test_general_ledger_activity_filters_reversals_and_pagination(
 
     admin_cookie = await login_and_get_cookie(client, admin.email)
     customer_cookie = await login_and_get_cookie(client, customer.email)
-    report_date = datetime.now(timezone.utc).date()
+    report_date = date(2099, 6, 1)
     base_params = {
         "currency": currency.value,
         "from_date": report_date.isoformat(),
@@ -380,7 +485,22 @@ async def test_general_ledger_activity_filters_reversals_and_pagination(
         client, admin_cookie, reversed_account.id, "60.00"
     )
     reversal = await reverse_transaction(client, admin_cookie, reversed_deposit["id"])
-    await post_deposit(client, admin_cookie, eur_account.id, "77.00")
+    eur_deposit = await post_deposit(client, admin_cookie, eur_account.id, "77.00")
+
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        await move_transactions_to_report_date(
+            db,
+            [
+                deposit["id"],
+                withdrawal["id"],
+                transfer["id"],
+                interest["id"],
+                reversed_deposit["id"],
+                reversal["id"],
+                eur_deposit["id"],
+            ],
+            report_date,
+        )
 
     source_report = await get_general_ledger(
         client,
@@ -491,6 +611,105 @@ async def test_general_ledger_activity_filters_reversals_and_pagination(
     assert reversal_entry["transaction_type"] == "reversal"
     assert reversal_entry["entry_type"] == "debit"
 
+    summary_report = await get_general_ledger_account_summary(
+        client, admin_cookie, {**base_params, "limit": "20"}
+    )
+    assert summary_report["currency"] == currency.value
+    assert summary_report["account_count"] == 6
+    assert summary_report["has_more"] is False
+    assert decimal_value(summary_report["total_debit"]) == Decimal("897.50")
+    assert decimal_value(summary_report["total_credit"]) == Decimal("897.50")
+    assert decimal_value(summary_report["total_net_debit"]) == Decimal("425.50")
+    assert decimal_value(summary_report["total_net_credit"]) == Decimal("425.50")
+
+    source_summary = summary_line_by_account_id(summary_report, source.id)
+    assert source_summary is not None
+    assert source_summary["account_target_type"] == "customer_account"
+    assert source_summary["account_code"] == source.account_number
+    assert decimal_value(source_summary["debit_total"]) == Decimal("252.00")
+    assert decimal_value(source_summary["credit_total"]) == Decimal("500.00")
+    assert decimal_value(source_summary["net_debit"]) == Decimal("0.00")
+    assert decimal_value(source_summary["net_credit"]) == Decimal("248.00")
+    assert source_summary["transaction_count"] == 3
+    assert source_summary["ledger_entry_count"] == 3
+    assert source_summary["last_activity_at"] is not None
+
+    destination_summary = summary_line_by_account_id(summary_report, destination.id)
+    assert destination_summary is not None
+    assert decimal_value(destination_summary["debit_total"]) == Decimal("0.00")
+    assert decimal_value(destination_summary["credit_total"]) == Decimal("175.50")
+    assert decimal_value(destination_summary["net_debit"]) == Decimal("0.00")
+    assert decimal_value(destination_summary["net_credit"]) == Decimal("175.50")
+    assert destination_summary["transaction_count"] == 2
+    assert destination_summary["ledger_entry_count"] == 2
+
+    reversed_summary = summary_line_by_account_id(summary_report, reversed_account.id)
+    assert reversed_summary is not None
+    assert decimal_value(reversed_summary["debit_total"]) == Decimal("60.00")
+    assert decimal_value(reversed_summary["credit_total"]) == Decimal("60.00")
+    assert decimal_value(reversed_summary["net_debit"]) == Decimal("0.00")
+    assert decimal_value(reversed_summary["net_credit"]) == Decimal("0.00")
+    assert reversed_summary["transaction_count"] == 2
+    assert reversed_summary["ledger_entry_count"] == 2
+
+    fee_summary = summary_line_by_account_code(
+        summary_report, f"FEE-INCOME-{currency.value}"
+    )
+    assert fee_summary is not None
+    assert fee_summary["account_target_type"] == "internal_account"
+    assert decimal_value(fee_summary["debit_total"]) == Decimal("0.00")
+    assert decimal_value(fee_summary["credit_total"]) == Decimal("2.00")
+    assert decimal_value(fee_summary["net_credit"]) == Decimal("2.00")
+
+    interest_summary = summary_line_by_account_code(
+        summary_report, f"INTEREST-EXPENSE-{currency.value}"
+    )
+    assert interest_summary is not None
+    assert interest_summary["account_target_type"] == "internal_account"
+    assert decimal_value(interest_summary["debit_total"]) == Decimal("25.50")
+    assert decimal_value(interest_summary["credit_total"]) == Decimal("0.00")
+    assert decimal_value(interest_summary["net_debit"]) == Decimal("25.50")
+
+    source_summary_report = await get_general_ledger_account_summary(
+        client,
+        admin_cookie,
+        {
+            **base_params,
+            "account_target_type": "customer_account",
+            "account_id": str(source.id),
+        },
+    )
+    assert source_summary_report["account_count"] == 1
+    assert source_summary_report["accounts"][0]["account_id"] == str(source.id)
+    assert decimal_value(source_summary_report["total_debit"]) == Decimal("252.00")
+    assert decimal_value(source_summary_report["total_credit"]) == Decimal("500.00")
+    assert decimal_value(source_summary_report["total_net_debit"]) == Decimal("0.00")
+    assert decimal_value(source_summary_report["total_net_credit"]) == Decimal("248.00")
+
+    destination_summary_report = await get_general_ledger_account_summary(
+        client, admin_cookie, {**base_params, "account_code": destination.account_number}
+    )
+    assert destination_summary_report["account_count"] == 1
+    assert destination_summary_report["accounts"][0]["account_id"] == str(
+        destination.id
+    )
+
+    transfer_summary_report = await get_general_ledger_account_summary(
+        client,
+        admin_cookie,
+        {
+            **base_params,
+            "account_target_type": "customer_account",
+            "account_id": str(source.id),
+            "transaction_type": "transfer",
+        },
+    )
+    assert transfer_summary_report["account_count"] == 1
+    transfer_summary = transfer_summary_report["accounts"][0]
+    assert transfer_summary["transaction_count"] == 1
+    assert transfer_summary["ledger_entry_count"] == 1
+    assert decimal_value(transfer_summary["debit_total"]) == Decimal("152.00")
+
     eur_filtered_report = await get_general_ledger(
         client,
         admin_cookie,
@@ -502,6 +721,30 @@ async def test_general_ledger_activity_filters_reversals_and_pagination(
     )
     assert eur_filtered_report["entry_count"] == 0
     assert eur_filtered_report["entries"] == []
+
+    eur_filtered_summary = await get_general_ledger_account_summary(
+        client,
+        admin_cookie,
+        {
+            **base_params,
+            "account_target_type": "customer_account",
+            "account_id": str(eur_account.id),
+        },
+    )
+    assert eur_filtered_summary["account_count"] == 0
+    assert eur_filtered_summary["accounts"] == []
+
+    outside_date_summary = await get_general_ledger_account_summary(
+        client,
+        admin_cookie,
+        {
+            "currency": currency.value,
+            "from_date": (report_date + timedelta(days=2)).isoformat(),
+            "to_date": (report_date + timedelta(days=2)).isoformat(),
+        },
+    )
+    assert outside_date_summary["account_count"] == 0
+    assert outside_date_summary["accounts"] == []
 
     full_source_report = await get_general_ledger(
         client,
@@ -543,6 +786,81 @@ async def test_general_ledger_activity_filters_reversals_and_pagination(
     )
 
 
+async def test_general_ledger_account_summary_paginates_after_grouping(
+    client: AsyncClient,
+):
+    from infrastructure.database import engine
+
+    report_date = date(2099, 6, 2)
+    currency = AccountCurrencyEnum.DKK
+    unique = uuid.uuid4().hex[:6]
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        customer = await create_role_user(
+            db, f"glp_c_{unique}", RoleChoicesSchema.CUSTOMER
+        )
+        admin = await create_role_user(
+            db, f"glp_a_{unique}", RoleChoicesSchema.ADMIN
+        )
+        accounts = [
+            await create_active_account(
+                db,
+                customer.id,
+                Decimal("0.00"),
+                currency,
+                f"GL Page {index}",
+            )
+            for index in range(3)
+        ]
+
+    admin_cookie = await login_and_get_cookie(client, admin.email)
+    transaction_ids: list[str] = []
+    for account in accounts:
+        first = await post_deposit(client, admin_cookie, account.id, "10.00")
+        second = await post_deposit(client, admin_cookie, account.id, "20.00")
+        transaction_ids.extend([first["id"], second["id"]])
+
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        await move_transactions_to_report_date(db, transaction_ids, report_date)
+
+    base_params = {
+        "currency": currency.value,
+        "from_date": report_date.isoformat(),
+        "to_date": report_date.isoformat(),
+        "account_target_type": "customer_account",
+    }
+    full_summary = await get_general_ledger_account_summary(
+        client, admin_cookie, {**base_params, "limit": "10"}
+    )
+    first_page = await get_general_ledger_account_summary(
+        client, admin_cookie, {**base_params, "limit": "2"}
+    )
+    second_page = await get_general_ledger_account_summary(
+        client, admin_cookie, {**base_params, "limit": "2", "offset": "2"}
+    )
+
+    assert full_summary["account_count"] == 3
+    assert first_page["account_count"] == 2
+    assert first_page["has_more"] is True
+    assert second_page["account_count"] == 1
+    assert second_page["has_more"] is False
+    assert account_ids(first_page) + account_ids(second_page) == account_ids(
+        full_summary
+    )
+
+    for line in first_page["accounts"]:
+        assert decimal_value(line["debit_total"]) == Decimal("0.00")
+        assert decimal_value(line["credit_total"]) == Decimal("30.00")
+        assert decimal_value(line["net_debit"]) == Decimal("0.00")
+        assert decimal_value(line["net_credit"]) == Decimal("30.00")
+        assert line["transaction_count"] == 2
+        assert line["ledger_entry_count"] == 2
+
+    assert decimal_value(first_page["total_debit"]) == Decimal("0.00")
+    assert decimal_value(first_page["total_credit"]) == Decimal("60.00")
+    assert decimal_value(first_page["total_net_debit"]) == Decimal("0.00")
+    assert decimal_value(first_page["total_net_credit"]) == Decimal("60.00")
+
+
 async def test_general_ledger_rejects_corrupted_ledger_targets(client: AsyncClient):
     from infrastructure.database import engine
 
@@ -582,6 +900,17 @@ async def test_general_ledger_rejects_corrupted_ledger_targets(client: AsyncClie
     client.cookies.update(admin_cookie)
     resp = await client.get(
         "/api/v1/admin/reports/general-ledger",
+        params={
+            "currency": AccountCurrencyEnum.USD.value,
+            "from_date": date(2099, 1, 1).isoformat(),
+            "to_date": date(2099, 1, 1).isoformat(),
+        },
+    )
+    assert resp.status_code == 500
+    assert "exactly one account target" in resp.json()["detail"]
+
+    resp = await client.get(
+        "/api/v1/admin/reports/general-ledger/accounts",
         params={
             "currency": AccountCurrencyEnum.USD.value,
             "from_date": date(2099, 1, 1).isoformat(),
