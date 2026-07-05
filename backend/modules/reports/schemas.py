@@ -81,3 +81,37 @@ class GeneralLedgerReportSchema(BaseModel):
     has_more: bool
 
     entries: list[GeneralLedgerEntrySchema]
+
+
+class GeneralLedgerAccountSummaryLineSchema(BaseModel):
+    account_target_type: AccountTargetType
+    account_id: uuid.UUID
+    account_code: str
+    account_name: str
+    account_type: str
+    currency: AccountCurrencyEnum
+    debit_total: Decimal
+    credit_total: Decimal
+    net_debit: Decimal
+    net_credit: Decimal
+    transaction_count: int
+    ledger_entry_count: int
+    last_activity_at: datetime
+
+
+class GeneralLedgerAccountSummaryReportSchema(BaseModel):
+    from_date: date
+    to_date: date
+    currency: AccountCurrencyEnum
+    generated_at: datetime
+
+    total_debit: Decimal
+    total_credit: Decimal
+    total_net_debit: Decimal
+    total_net_credit: Decimal
+    account_count: int
+    limit: int
+    offset: int
+    has_more: bool
+
+    accounts: list[GeneralLedgerAccountSummaryLineSchema]
