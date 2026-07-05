@@ -15,6 +15,7 @@ from modules.batches.models import (
     EndOfDayBatchCurrencySummary,
     EndOfDayBatchValidationIssue,
 )
+from modules.notifications.models import Notification
 from typing import Annotated, AsyncGenerator, cast
 from fastapi import Depends
 

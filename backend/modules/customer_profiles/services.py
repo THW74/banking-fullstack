@@ -142,6 +142,22 @@ class CustomerProfileService:
         db.add(profile)
         await db.commit()
         await db.refresh(profile)
+
+        try:
+            from modules.notifications.services import notification_service
+            from modules.notifications.enums import NotificationTypeEnum
+            await notification_service.create_notification(
+                db,
+                user_id=profile.user_id,
+                title="KYC Profile Submitted",
+                message="Your KYC profile has been submitted for review.",
+                notification_type=NotificationTypeEnum.KYC,
+                source_metadata={"profile_id": str(profile.id)},
+            )
+        except Exception:
+            pass
+
+        await db.refresh(profile)
         return profile
 
     async def list_profiles_for_review(
@@ -200,6 +216,22 @@ class CustomerProfileService:
         db.add(profile)
         await db.commit()
         await db.refresh(profile)
+
+        try:
+            from modules.notifications.services import notification_service
+            from modules.notifications.enums import NotificationTypeEnum
+            await notification_service.create_notification(
+                db,
+                user_id=profile.user_id,
+                title="KYC Profile Approved",
+                message="Your KYC profile has been successfully approved.",
+                notification_type=NotificationTypeEnum.KYC,
+                source_metadata={"profile_id": str(profile.id)},
+            )
+        except Exception:
+            pass
+
+        await db.refresh(profile)
         return profile
 
     async def reject_profile(
@@ -226,6 +258,22 @@ class CustomerProfileService:
 
         db.add(profile)
         await db.commit()
+        await db.refresh(profile)
+
+        try:
+            from modules.notifications.services import notification_service
+            from modules.notifications.enums import NotificationTypeEnum
+            await notification_service.create_notification(
+                db,
+                user_id=profile.user_id,
+                title="KYC Profile Rejected",
+                message=f"Your KYC profile has been rejected. Reason: {profile.rejection_reason}",
+                notification_type=NotificationTypeEnum.KYC,
+                source_metadata={"profile_id": str(profile.id), "rejection_reason": profile.rejection_reason},
+            )
+        except Exception:
+            pass
+
         await db.refresh(profile)
         return profile
 

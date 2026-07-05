@@ -29,6 +29,7 @@ class UserPermission(StrEnum):
     GENERATE_DAILY_BALANCE_SNAPSHOTS = "GENERATE_DAILY_BALANCE_SNAPSHOTS"
     READ_END_OF_DAY_BATCHES = "READ_END_OF_DAY_BATCHES"
     RUN_END_OF_DAY_BATCHES = "RUN_END_OF_DAY_BATCHES"
+    READ_NOTIFICATIONS = "READ_NOTIFICATIONS"
 
 
 ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
@@ -70,6 +71,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_FINANCIAL_REPORTS,
         UserPermission.READ_DAILY_BALANCE_SNAPSHOTS,
         UserPermission.READ_END_OF_DAY_BATCHES,
+        UserPermission.READ_NOTIFICATIONS,
     },
     
     RoleChoicesSchema.ADMIN: {
@@ -97,6 +99,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.GENERATE_DAILY_BALANCE_SNAPSHOTS,
         UserPermission.READ_END_OF_DAY_BATCHES,
         UserPermission.RUN_END_OF_DAY_BATCHES,
+        UserPermission.READ_NOTIFICATIONS,
     },
     
     RoleChoicesSchema.SUPER_ADMIN: {
@@ -126,6 +129,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.GENERATE_DAILY_BALANCE_SNAPSHOTS,
         UserPermission.READ_END_OF_DAY_BATCHES,
         UserPermission.RUN_END_OF_DAY_BATCHES,
+        UserPermission.READ_NOTIFICATIONS,
     },
 }
 

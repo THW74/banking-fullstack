@@ -356,6 +356,23 @@ class EndOfDayBatchService:
         await db.commit()
         await db.refresh(batch)
 
+        try:
+            from modules.notifications.services import notification_service
+            from modules.notifications.enums import NotificationTypeEnum
+            status_text = "completed successfully" if batch.is_balanced else f"failed: {batch.failure_reason}"
+            await notification_service.create_notification(
+                db,
+                user_id=batch.requested_by_user_id,
+                title="EOD Batch Execution Finished",
+                message=f"End-of-day batch for business date {batch.business_date.isoformat()} has {status_text}.",
+                notification_type=NotificationTypeEnum.SYSTEM,
+                source_metadata={"batch_id": str(batch.id), "business_date": batch.business_date.isoformat(), "is_balanced": batch.is_balanced},
+            )
+        except Exception:
+            pass
+
+        await db.refresh(batch)
+
     async def _get_snapshot_coverage_issues(
         self,
         db: AsyncSession,

@@ -18,6 +18,7 @@ from modules.reports.routes import admin_reports_router
 from modules.daily_balance_snapshots.routes import admin_daily_balance_snapshots_router
 from modules.batches.routes import admin_batches_router
 from modules.transactions.routes import customer_transactions_router, admin_transactions_router
+from modules.notifications.routes import customer_notifications_router, admin_notifications_router
 
 @asynccontextmanager
 async def life_span(app: FastAPI):
@@ -111,6 +112,16 @@ app.include_router(
     admin_transactions_router,
     prefix=settings.API_V1_STR + "/admin/transactions",
     tags=["admin-transactions"],
+)
+app.include_router(
+    customer_notifications_router,
+    prefix=settings.API_V1_STR + "/customer/notifications",
+    tags=["customer-notifications"],
+)
+app.include_router(
+    admin_notifications_router,
+    prefix=settings.API_V1_STR + "/admin/notifications",
+    tags=["admin-notifications"],
 )
 
 @app.get("/")
