@@ -37,6 +37,7 @@ than reposting or recalculating account balances.
 | `products` | Deposit account products catalog, lifecycle transitions, and active product browsing. | `/api/v1/customer/products`, `/api/v1/admin/products` |
 | `transactions` | Deposits, withdrawals, transfers, fees, manual interest posting, reversals, and transaction ledger access. | `/api/v1/customer/transactions`, `/api/v1/admin/transactions` |
 | `reports` | Read-only financial reporting from ledger data. | `/api/v1/admin/reports/trial-balance`, `/api/v1/admin/reports/general-ledger` |
+| `daily_balance_snapshots` | Per-account daily balance snapshot generation and inspection for statement/reporting foundations. | `/api/v1/admin/daily-balance-snapshots` |
 | `batches` | Manual end-of-day audit closes and persisted validation snapshots. | `/api/v1/admin/batches/end-of-day` |
 
 ## Backend Architecture
@@ -74,6 +75,7 @@ flowchart TB
     App --> CustomerProducts["customer_products_router<br/>/api/v1/customer/products"]
     App --> AdminProducts["admin_products_router<br/>/api/v1/admin/products"]
     App --> Reports["admin_reports_router<br/>/api/v1/admin/reports"]
+    App --> DailySnapshots["admin_daily_balance_snapshots_router<br/>/api/v1/admin/daily-balance-snapshots"]
     App --> Batches["admin_batches_router<br/>/api/v1/admin/batches"]
     App --> CustomerTransactions["customer_transactions_router<br/>/api/v1/customer/transactions"]
     App --> AdminTransactions["admin_transactions_router<br/>/api/v1/admin/transactions"]
@@ -94,6 +96,7 @@ registered by imports in `backend/infrastructure/database.py`:
 - `transactions`
 - `ledger_entries`
 - `fee_rules`
+- `daily_balance_snapshots`
 - `end_of_day_batches`
 - `end_of_day_batch_currency_summaries`
 - `end_of_day_batch_validation_issues`
@@ -116,6 +119,8 @@ Current financial-control permissions include:
 - `POST_BANK_TRANSACTIONS`
 - `REVERSE_BANK_TRANSACTIONS`
 - `READ_FINANCIAL_REPORTS`
+- `READ_DAILY_BALANCE_SNAPSHOTS`
+- `GENERATE_DAILY_BALANCE_SNAPSHOTS`
 - `READ_END_OF_DAY_BATCHES`
 - `RUN_END_OF_DAY_BATCHES`
 
@@ -303,7 +308,7 @@ deposit catalog is stable; it should not block automated deposit interest work.
 | Field | Value |
 | --- | --- |
 | Branch | `feat/daily-balance-snapshots` |
-| PR title | `feat(backend): add daily balance snapshots` |
+| PR title | `Add daily balance snapshot permissions and routing` |
 | Purpose | Establish per-account daily balance history for statements and historical reporting. |
 
 Key backend changes:
