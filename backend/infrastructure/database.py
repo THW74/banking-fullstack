@@ -9,6 +9,7 @@ from modules.next_of_kin.models import NextOfKin
 from modules.accounts.models import BankAccount, InternalAccount
 from modules.transactions.models import Transaction, LedgerEntry, FeeRule
 from modules.products.models import AccountProduct
+from modules.daily_balance_snapshots.models import DailyBalanceSnapshot
 from modules.batches.models import (
     EndOfDayBatch,
     EndOfDayBatchCurrencySummary,
