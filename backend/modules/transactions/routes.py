@@ -11,6 +11,7 @@ from modules.users.permissions import UserPermission
 from .schemas import (
     CustomerTransferSchema,
     AdminDepositSchema,
+    AdminInterestPostingSchema,
     AdminWithdrawalSchema,
     LedgerEntryReadSchema,
     TransactionReversalSchema,
@@ -152,6 +153,25 @@ async def admin_deposit(
     db: AsyncSession = Depends(get_session),
 ):
     return await transaction_service.admin_deposit(
+        db, current_user.user_id, payload
+    )
+
+
+@admin_transactions_router.post(
+    "/interest-posting",
+    response_model=TransactionReadSchema,
+    status_code=status.HTTP_201_CREATED,
+    summary="Admin post interest into customer account",
+)
+async def admin_interest_posting(
+    payload: AdminInterestPostingSchema,
+    current_user: Annotated[
+        CurrentUser,
+        Depends(require_user_permission(UserPermission.POST_BANK_TRANSACTIONS)),
+    ],
+    db: AsyncSession = Depends(get_session),
+):
+    return await transaction_service.admin_interest_posting(
         db, current_user.user_id, payload
     )
 

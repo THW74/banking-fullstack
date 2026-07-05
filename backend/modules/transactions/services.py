@@ -18,6 +18,7 @@ from .enums import TransactionTypeEnum, TransactionStatusEnum, LedgerEntryTypeEn
 from .schemas import (
     CustomerTransferSchema,
     AdminDepositSchema,
+    AdminInterestPostingSchema,
     AdminWithdrawalSchema,
     TransactionReversalSchema,
 )
@@ -300,6 +301,89 @@ class TransactionService:
         db.add(destination)
         db.add(transaction)
         await db.flush()  # Flush transaction row so FK on ledger_entries is satisfied
+        for entry in entries:
+            db.add(entry)
+        await db.commit()
+        await db.refresh(transaction)
+        return transaction
+
+    async def admin_interest_posting(
+        self,
+        db: AsyncSession,
+        actor_user_id: uuid.UUID,
+        schema: AdminInterestPostingSchema,
+    ) -> Transaction:
+        """Admin/staff post manual interest into a customer account.
+
+        Creates a balanced internal interest expense DEBIT and customer CREDIT
+        entry.
+        """
+        destination = await self._get_account_for_update(
+            db, schema.destination_account_id
+        )
+
+        if destination.account_status != AccountStatusEnum.ACTIVE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Destination account is not active",
+            )
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        reference = await self._generate_unique_reference(db)
+        interest_expense_account = (
+            await internal_account_service.get_or_create_interest_expense_account(
+                db, destination.currency
+            )
+        )
+
+        self._apply_internal_account_entry_effect(
+            interest_expense_account,
+            LedgerEntryTypeEnum.DEBIT,
+            schema.amount,
+        )
+        interest_expense_account.updated_at = now
+        destination.available_balance += schema.amount
+        destination.current_balance += schema.amount
+        destination.updated_at = now
+
+        transaction = Transaction(
+            reference=reference,
+            transaction_type=TransactionTypeEnum.INTEREST_POSTING,
+            status=TransactionStatusEnum.POSTED,
+            source_account_id=None,
+            destination_account_id=schema.destination_account_id,
+            amount=schema.amount,
+            fee_amount=Decimal("0.00"),
+            total_debit_amount=schema.amount,
+            currency=destination.currency,
+            description=schema.description,
+            created_by_user_id=actor_user_id,
+            posted_at=now,
+        )
+
+        interest_expense_entry = LedgerEntry(
+            transaction_id=transaction.id,
+            internal_account_id=interest_expense_account.id,
+            entry_type=LedgerEntryTypeEnum.DEBIT,
+            amount=schema.amount,
+            currency=destination.currency,
+            balance_after=interest_expense_account.balance,
+        )
+        credit_entry = LedgerEntry(
+            transaction_id=transaction.id,
+            customer_account_id=destination.id,
+            entry_type=LedgerEntryTypeEnum.CREDIT,
+            amount=schema.amount,
+            currency=destination.currency,
+            balance_after=destination.available_balance,
+        )
+        entries = [interest_expense_entry, credit_entry]
+        self._assert_ledger_entries_valid(entries)
+
+        db.add(interest_expense_account)
+        db.add(destination)
+        db.add(transaction)
+        await db.flush()
         for entry in entries:
             db.add(entry)
         await db.commit()
@@ -671,6 +755,9 @@ class TransactionService:
         if original.transaction_type == TransactionTypeEnum.TRANSFER:
             return original.destination_account_id, original.source_account_id
 
+        if original.transaction_type == TransactionTypeEnum.INTEREST_POSTING:
+            return original.destination_account_id, None
+
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Transaction type cannot be reversed",
@@ -774,6 +861,13 @@ class TransactionService:
 
         if account.account_type == InternalAccountTypeEnum.FEE_INCOME:
             if entry_type == LedgerEntryTypeEnum.CREDIT:
+                account.balance += amount
+            else:
+                account.balance -= amount
+            return
+
+        if account.account_type == InternalAccountTypeEnum.INTEREST_EXPENSE:
+            if entry_type == LedgerEntryTypeEnum.DEBIT:
                 account.balance += amount
             else:
                 account.balance -= amount

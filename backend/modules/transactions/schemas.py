@@ -24,6 +24,12 @@ class AdminDepositSchema(BaseModel):
     description: str | None = Field(default=None, max_length=255)
 
 
+class AdminInterestPostingSchema(BaseModel):
+    destination_account_id: uuid.UUID
+    amount: Decimal = Field(gt=Decimal("0.00"))
+    description: str | None = Field(default=None, max_length=255)
+
+
 class AdminWithdrawalSchema(BaseModel):
     source_account_id: uuid.UUID
     amount: Decimal = Field(gt=Decimal("0.00"))

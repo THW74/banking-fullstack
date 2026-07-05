@@ -5,6 +5,7 @@ class TransactionTypeEnum(str, Enum):
     DEPOSIT = "deposit"
     WITHDRAWAL = "withdrawal"
     TRANSFER = "transfer"
+    INTEREST_POSTING = "interest_posting"
     REVERSAL = "reversal"
 
 
