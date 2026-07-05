@@ -24,6 +24,7 @@ class UserPermission(StrEnum):
     READ_TRANSACTIONS = "READ_TRANSACTIONS"
     POST_BANK_TRANSACTIONS = "POST_BANK_TRANSACTIONS"
     REVERSE_BANK_TRANSACTIONS = "REVERSE_BANK_TRANSACTIONS"
+    READ_FINANCIAL_REPORTS = "READ_FINANCIAL_REPORTS"
 
 
 ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
@@ -62,6 +63,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_TRANSACTIONS,
         UserPermission.POST_BANK_TRANSACTIONS,
         UserPermission.REVERSE_BANK_TRANSACTIONS,
+        UserPermission.READ_FINANCIAL_REPORTS,
     },
     
     RoleChoicesSchema.ADMIN: {
@@ -84,6 +86,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_TRANSACTIONS,
         UserPermission.POST_BANK_TRANSACTIONS,
         UserPermission.REVERSE_BANK_TRANSACTIONS,
+        UserPermission.READ_FINANCIAL_REPORTS,
     },
     
     RoleChoicesSchema.SUPER_ADMIN: {
@@ -108,6 +111,7 @@ ROLE_PERMISSIONS: dict[RoleChoicesSchema, set[UserPermission]] = {
         UserPermission.READ_TRANSACTIONS,
         UserPermission.POST_BANK_TRANSACTIONS,
         UserPermission.REVERSE_BANK_TRANSACTIONS,
+        UserPermission.READ_FINANCIAL_REPORTS,
     },
 }
 
